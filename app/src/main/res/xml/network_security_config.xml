@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network security configuration for ImageNext.
+    Security policy: HTTPS-only by default. Cleartext traffic is disabled globally.
+    Self-signed certificate trust will be handled via explicit user confirmation
+    in the onboarding flow (Phase 2+).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
