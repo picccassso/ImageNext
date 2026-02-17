@@ -51,12 +51,9 @@ fun FolderSelectionScreen(
 
             // Header
             Text(
-                text = "CHOOSE FOLDERS",
-                style = MaterialTheme.typography.labelLarge.copy(
-                    letterSpacing = 2.sp,
-                    fontWeight = FontWeight.Light
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                text = "Choose folders",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
@@ -70,9 +67,9 @@ fun FolderSelectionScreen(
                 is FolderSelectionUiState.Loading -> LoadingState()
                 is FolderSelectionUiState.Error -> ErrorState(state.message, onRetry = { viewModel.loadFolders() })
                 is FolderSelectionUiState.Ready -> {
-                    // Search bar - Premium Styling
+                    // Search bar
                     Surface(
-                        shape = RoundedCornerShape(16.dp),
+                        shape = MaterialTheme.shapes.medium,
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -95,7 +92,7 @@ fun FolderSelectionScreen(
                                 unfocusedBorderColor = Color.Transparent,
                                 cursorColor = MaterialTheme.colorScheme.primary
                             ),
-                            shape = RoundedCornerShape(16.dp)
+                            shape = MaterialTheme.shapes.medium
                         )
                     }
                     
@@ -103,9 +100,9 @@ fun FolderSelectionScreen(
 
                     // Folder list header
                     Text(
-                        text = "AVAILABLE FOLDERS",
-                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary,
+                        text = "Available folders",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 8.dp, bottom = 12.dp)
                     )
 
@@ -161,12 +158,12 @@ fun FolderSelectionScreen(
                         containerColor = MaterialTheme.colorScheme.primary,
                         disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
                     ),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.medium,
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
                     Text(
-                        text = "CONTINUE WITH ${selectedPaths.size} FOLDER${if (selectedPaths.size != 1) "S" else ""}",
-                        style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.sp)
+                        text = "Continue with ${selectedPaths.size} folder${if (selectedPaths.size != 1) "s" else ""}",
+                        style = MaterialTheme.typography.labelLarge
                     )
                 }
             }
@@ -183,7 +180,7 @@ private fun FolderItem(
 ) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.medium,
         color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
         border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)) else null,
         modifier = modifier.fillMaxWidth()
@@ -195,7 +192,7 @@ private fun FolderItem(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)),
                 contentAlignment = Alignment.Center
             ) {
@@ -240,9 +237,9 @@ private fun LoadingState() {
             CircularProgressIndicator(strokeWidth = 3.dp, modifier = Modifier.size(48.dp))
             Spacer(modifier = Modifier.height(24.dp))
             Text(
-                text = "DISCOVERING FOLDERS",
-                style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 2.sp, fontWeight = FontWeight.Light),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                text = "Loading folders...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             )
         }
     }
@@ -255,7 +252,7 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
             Text(text = message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
             Spacer(modifier = Modifier.height(16.dp))
             TextButton(onClick = onRetry) {
-                Text("TRY AGAIN", fontWeight = FontWeight.Bold)
+                Text("Try again", fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -265,8 +262,8 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
 private fun EmptyState(query: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(
-            text = if (query.isNotBlank()) "NO MATCHING FOLDERS" else "NO FOLDERS FOUND",
-            style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.sp),
+            text = if (query.isNotBlank()) "No matching folders" else "No folders found",
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
         )
     }

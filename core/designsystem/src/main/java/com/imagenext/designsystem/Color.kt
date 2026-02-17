@@ -10,15 +10,15 @@ val ImageNextMediumGray = Color(0xFF2D2D2D)
 val ImageNextLightGray = Color(0xFFB3B3B3)
 val ImageNextWhite = Color(0xFFFBFBFB)
 
-// Accent - Premium Indigo
-val ImageNextAccent = Color(0xFF6366F1)
-val ImageNextAccentVariant = Color(0xFF4F46E5)
-val ImageNextAccentSecondary = Color(0xFF818CF8)
+// Accent - Clean Blue
+val ImageNextAccent = Color(0xFF8AB4F8)
+val ImageNextAccentVariant = Color(0xFF669DF6)
+val ImageNextAccentSecondary = Color(0xFFAECBFA)
 
 // Semantic
 val ImageNextError = Color(0xFFEF4444)
 val ImageNextOnError = Color(0xFFFFFFFF)
 
 // Surface Overlays
-val ImageNextOnSurface = Color(0xFFE2E8F0)
-val ImageNextOnSurfaceVariant = Color(0xFF94A3B8)
+val ImageNextOnSurface = Color(0xFFE3E3E3)
+val ImageNextOnSurfaceVariant = Color(0xFF9E9E9E)

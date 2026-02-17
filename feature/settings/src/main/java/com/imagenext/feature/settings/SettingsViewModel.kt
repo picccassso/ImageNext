@@ -6,13 +6,18 @@ import androidx.lifecycle.viewModelScope
 import com.imagenext.core.data.FolderRepositoryImpl
 import com.imagenext.core.database.AppDatabase
 import com.imagenext.core.model.SyncState
+import com.imagenext.core.network.auth.NextcloudAuthApi
 import com.imagenext.core.security.AppLockManager
 import com.imagenext.core.security.CertificateTrustStore
+import com.imagenext.core.security.LockMethod
 import com.imagenext.core.security.SessionRepository
 import com.imagenext.core.sync.SyncOrchestrator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -23,6 +28,7 @@ import kotlinx.coroutines.launch
  */
 class SettingsViewModel(
     private val sessionRepository: SessionRepository,
+    private val authApi: NextcloudAuthApi,
     private val folderRepository: FolderRepositoryImpl,
     private val syncOrchestrator: SyncOrchestrator,
     private val certificateTrustStore: CertificateTrustStore,
@@ -39,23 +45,39 @@ class SettingsViewModel(
     init {
         loadSettings()
         observeSyncState()
+        observeConnectionStatus()
     }
 
     private fun loadSettings() {
-        viewModelScope.launch {
-            val session = sessionRepository.getSession()
-            val folderCount = folderRepository.getSelectedCount()
-            val trustedCerts = certificateTrustStore.getAll()
-            val isLockEnabled = appLockManager.isLockEnabled()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val session = sessionRepository.getSession()
+                val folderCount = folderRepository.getSelectedCount()
+                val trustedCerts = certificateTrustStore.getAll()
+                val isLockEnabled = appLockManager.isLockEnabled()
+                val lockMethod = appLockManager.getLockMethod()
+                val biometricAvailable = appLockManager.isBiometricAvailable()
+                val hasPin = appLockManager.hasPin()
+                val connectionStatus = when {
+                    session == null -> ConnectionStatus.NOT_CONNECTED
+                    else -> ConnectionStatus.NOT_CONNECTED
+                }
 
-            _uiState.value = _uiState.value.copy(
-                serverUrl = session?.serverUrl ?: "",
-                loginName = session?.loginName ?: "",
-                selectedFolderCount = folderCount,
-                trustedCertificates = trustedCerts,
-                isAppLockEnabled = isLockEnabled,
-                isLoading = false,
-            )
+                _uiState.value = _uiState.value.copy(
+                    serverUrl = session?.serverUrl ?: "",
+                    loginName = session?.loginName ?: "",
+                    connectionStatus = connectionStatus,
+                    selectedFolderCount = folderCount,
+                    trustedCertificates = trustedCerts,
+                    isAppLockEnabled = isLockEnabled,
+                    lockMethod = lockMethod,
+                    isBiometricAvailable = biometricAvailable,
+                    hasPin = hasPin,
+                    isLoading = false,
+                )
+            } catch (_: Exception) {
+                _uiState.value = _uiState.value.copy(isLoading = false)
+            }
         }
     }
 
@@ -63,6 +85,34 @@ class SettingsViewModel(
         viewModelScope.launch {
             syncOrchestrator.observeSyncState().collect { syncState ->
                 _uiState.value = _uiState.value.copy(syncState = syncState)
+            }
+        }
+    }
+
+    /**
+     * Periodically refreshes live server connectivity so Settings reflects
+     * connection changes without requiring an app restart.
+     */
+    private fun observeConnectionStatus() {
+        viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val nextStatus = try {
+                    val session = sessionRepository.getSession()
+                    when {
+                        session == null -> ConnectionStatus.NOT_CONNECTED
+                        authApi.checkServerReachability(session.serverUrl) is NextcloudAuthApi.AuthResult.Success ->
+                            ConnectionStatus.CONNECTED
+                        else -> ConnectionStatus.NOT_CONNECTED
+                    }
+                } catch (_: Exception) {
+                    ConnectionStatus.NOT_CONNECTED
+                }
+
+                if (_uiState.value.connectionStatus != nextStatus) {
+                    _uiState.value = _uiState.value.copy(connectionStatus = nextStatus)
+                }
+
+                delay(CONNECTION_STATUS_REFRESH_MS)
             }
         }
     }
@@ -84,8 +134,44 @@ class SettingsViewModel(
 
     /** Toggles app lock on or off. */
     fun setAppLockEnabled(enabled: Boolean) {
+        if (enabled) {
+            val method = appLockManager.getLockMethod()
+            val canEnable = when (method) {
+                LockMethod.PIN -> appLockManager.hasPin()
+                LockMethod.BIOMETRIC -> appLockManager.isBiometricAvailable()
+            }
+            if (!canEnable) {
+                _uiState.value = _uiState.value.copy(
+                    isAppLockEnabled = false,
+                    lockMethod = method,
+                    hasPin = appLockManager.hasPin(),
+                )
+                return
+            }
+        }
         appLockManager.setLockEnabled(enabled)
-        _uiState.value = _uiState.value.copy(isAppLockEnabled = enabled)
+        _uiState.value = _uiState.value.copy(
+            isAppLockEnabled = enabled,
+            lockMethod = appLockManager.getLockMethod(),
+            hasPin = appLockManager.hasPin(),
+        )
+    }
+
+    /** Updates the selected app lock method. */
+    fun setLockMethod(method: LockMethod) {
+        appLockManager.setLockMethod(method)
+        _uiState.value = _uiState.value.copy(lockMethod = method)
+    }
+
+    /** Stores a PIN for PIN-based unlock and ensures lock is enabled. */
+    fun savePin(pin: String) {
+        appLockManager.setPin(pin)
+        appLockManager.setLockEnabled(true)
+        _uiState.value = _uiState.value.copy(
+            hasPin = true,
+            isAppLockEnabled = true,
+            lockMethod = LockMethod.PIN,
+        )
     }
 
     /**
@@ -136,17 +222,29 @@ data class SettingsUiState(
     val isLoading: Boolean = true,
     val serverUrl: String = "",
     val loginName: String = "",
+    val connectionStatus: ConnectionStatus = ConnectionStatus.NOT_CONNECTED,
     val selectedFolderCount: Int = 0,
     val syncState: SyncState = SyncState.Idle,
     val trustedCertificates: List<CertificateTrustStore.TrustedCertificate> = emptyList(),
     val isAppLockEnabled: Boolean = false,
+    val lockMethod: LockMethod = LockMethod.PIN,
+    val isBiometricAvailable: Boolean = false,
+    val hasPin: Boolean = false,
 )
+
+enum class ConnectionStatus {
+    CONNECTED,
+    NOT_CONNECTED,
+}
+
+private const val CONNECTION_STATUS_REFRESH_MS = 10_000L
 
 /**
  * Factory for [SettingsViewModel].
  */
 class SettingsViewModelFactory(
     private val sessionRepository: SessionRepository,
+    private val authApi: NextcloudAuthApi,
     private val folderRepository: FolderRepositoryImpl,
     private val syncOrchestrator: SyncOrchestrator,
     private val certificateTrustStore: CertificateTrustStore,
@@ -157,6 +255,7 @@ class SettingsViewModelFactory(
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return SettingsViewModel(
             sessionRepository = sessionRepository,
+            authApi = authApi,
             folderRepository = folderRepository,
             syncOrchestrator = syncOrchestrator,
             certificateTrustStore = certificateTrustStore,

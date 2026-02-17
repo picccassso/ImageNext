@@ -1,21 +1,25 @@
 package com.imagenext.feature.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.imagenext.core.security.CertificateTrustStore
+import com.imagenext.core.security.LockMethod
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -34,10 +38,17 @@ import java.util.Locale
 fun SecuritySettingsSection(
     trustedCertificates: List<CertificateTrustStore.TrustedCertificate>,
     isAppLockEnabled: Boolean,
+    lockMethod: LockMethod,
+    isBiometricAvailable: Boolean,
+    hasPin: Boolean,
     onRevokeCertificate: (String) -> Unit,
     onAppLockToggle: (Boolean) -> Unit,
+    onLockMethodSelected: (LockMethod) -> Unit,
+    onSavePin: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showPinDialog by remember { mutableStateOf(false) }
+
     Column(modifier = modifier) {
         // App Lock
         Row(
@@ -50,14 +61,14 @@ fun SecuritySettingsSection(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     Icons.Default.Lock,
                     contentDescription = null,
                     modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Spacer(modifier = Modifier.width(16.dp))
@@ -83,6 +94,43 @@ fun SecuritySettingsSection(
             )
         }
 
+        if (isAppLockEnabled) {
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.padding(start = 52.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = lockMethod == LockMethod.PIN,
+                    onClick = { onLockMethodSelected(LockMethod.PIN) },
+                    label = { Text("PIN") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Pin, contentDescription = null, modifier = Modifier.size(16.dp))
+                    },
+                )
+                if (isBiometricAvailable) {
+                    FilterChip(
+                        selected = lockMethod == LockMethod.BIOMETRIC,
+                        onClick = { onLockMethodSelected(LockMethod.BIOMETRIC) },
+                        label = { Text("Biometric") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Fingerprint, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                    )
+                }
+            }
+
+            Text(
+                text = if (hasPin) "Change PIN" else "Set PIN",
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(start = 52.dp, top = 10.dp)
+                    .clickable { showPinDialog = true },
+            )
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
 
         // Trusted Certificates Header
@@ -94,14 +142,14 @@ fun SecuritySettingsSection(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     Icons.Default.Security,
                     contentDescription = null,
                     modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Spacer(modifier = Modifier.width(16.dp))
@@ -130,6 +178,54 @@ fun SecuritySettingsSection(
             }
         }
     }
+
+    if (showPinDialog) {
+        PinDialog(
+            onDismiss = { showPinDialog = false },
+            onSave = { pin ->
+                onSavePin(pin)
+                showPinDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun PinDialog(
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var pin by remember { mutableStateOf("") }
+    val valid = pin.length >= 4
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Set PIN") },
+        text = {
+            OutlinedTextField(
+                value = pin,
+                onValueChange = { pin = it.filter(Char::isDigit).take(8) },
+                singleLine = true,
+                label = { Text("PIN (4-8 digits)") },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                ),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(pin) },
+                enabled = valid,
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @Composable

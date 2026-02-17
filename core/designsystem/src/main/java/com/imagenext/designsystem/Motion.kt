@@ -2,9 +2,12 @@ package com.imagenext.designsystem
 
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.SpringSpec
+import androidx.compose.animation.core.spring
 
 /**
- * Motion constants for consistent, premium animation feel.
+ * Motion constants for consistent animation feel.
  */
 object Motion {
     /** Ultra-short transitions like ripples and subtle fades. */
@@ -19,13 +22,25 @@ object Motion {
     /** Complex orchestrated animations. */
     const val DURATION_EXTRA_LONG_MS = 600
 
+    /** Spring for viewer open/close — slightly bouncy for natural feel. */
+    val ViewerSpring: SpringSpec<Float> = spring(
+        dampingRatio = Spring.DampingRatioLowBouncy,
+        stiffness = Spring.StiffnessLow,
+    )
+
+    /** Spring for zoom animations — snappy with no overshoot. */
+    val ZoomSpring: SpringSpec<Float> = spring(
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = Spring.StiffnessMedium,
+    )
+
     /**
      * Easing curves based on Material 3 motion system.
      */
     object Easing {
         /** Easing for elements entering the screen. */
         val Emphasized: androidx.compose.animation.core.Easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
-        
+
         /** Easing for elements leaving the screen. */
         val Decelerate: androidx.compose.animation.core.Easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
 

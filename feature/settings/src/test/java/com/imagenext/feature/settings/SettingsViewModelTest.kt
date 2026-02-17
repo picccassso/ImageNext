@@ -22,6 +22,7 @@ class SettingsViewModelTest {
         assertTrue(state.isLoading)
         assertEquals("", state.serverUrl)
         assertEquals("", state.loginName)
+        assertEquals(ConnectionStatus.NOT_CONNECTED, state.connectionStatus)
         assertEquals(0, state.selectedFolderCount)
         assertEquals(SyncState.Idle, state.syncState)
         assertTrue(state.trustedCertificates.isEmpty())
@@ -48,6 +49,7 @@ class SettingsViewModelTest {
             isLoading = false,
             serverUrl = "https://my.server",
             loginName = "user1",
+            connectionStatus = ConnectionStatus.CONNECTED,
             selectedFolderCount = 3,
             syncState = SyncState.Completed,
             isAppLockEnabled = true,
@@ -55,6 +57,7 @@ class SettingsViewModelTest {
         val modified = original.copy(syncState = SyncState.Running)
         assertEquals("https://my.server", modified.serverUrl)
         assertEquals("user1", modified.loginName)
+        assertEquals(ConnectionStatus.CONNECTED, modified.connectionStatus)
         assertEquals(3, modified.selectedFolderCount)
         assertEquals(SyncState.Running, modified.syncState)
         assertTrue(modified.isAppLockEnabled)

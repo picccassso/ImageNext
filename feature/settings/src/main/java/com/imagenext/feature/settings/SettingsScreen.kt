@@ -1,5 +1,9 @@
 package com.imagenext.feature.settings
 
+import android.app.Activity
+import android.content.pm.PackageManager
+import android.hardware.biometrics.BiometricPrompt
+import android.os.CancellationSignal
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,9 +20,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.imagenext.core.model.SyncState
+import com.imagenext.core.security.LockMethod
 import com.imagenext.designsystem.ImageNextSurface
 
 @Composable
@@ -29,6 +36,8 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val logoutEvent by viewModel.logoutEvent.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val activity = context as? Activity
     var showLogoutDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(logoutEvent) {
@@ -51,19 +60,16 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(32.dp))
                 
                 Text(
-                    text = "SETTINGS",
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        letterSpacing = 2.sp,
-                        fontWeight = FontWeight.Light
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    text = "Settings",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(bottom = 24.dp)
                 )
 
                 // ── Account Section ──
-                SectionHeader(text = "ACCOUNT")
+                SectionHeader(text = "Account")
                 Surface(
-                    shape = RoundedCornerShape(24.dp),
+                    shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -79,15 +85,28 @@ fun SettingsScreen(
                             label = "User",
                             value = uiState.loginName,
                         )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = Color.White.copy(alpha = 0.05f))
+                        SettingsRow(
+                            icon = {
+                                Icon(
+                                    Icons.Default.Link,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = connectionStatusIconTint(uiState.connectionStatus),
+                                )
+                            },
+                            label = "Connection",
+                            value = connectionStatusLabel(uiState.connectionStatus),
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
 
                 // ── Sync Section ──
-                SectionHeader(text = "SYNCHRONIZATION")
+                SectionHeader(text = "Sync")
                 Surface(
-                    shape = RoundedCornerShape(24.dp),
+                    shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -102,12 +121,12 @@ fun SettingsScreen(
                             Button(
                                 onClick = { viewModel.retrySync() },
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
+                                shape = MaterialTheme.shapes.medium,
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
                             ) {
                                 Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("RETRY SYNC", color = MaterialTheme.colorScheme.primary)
+                                Text("Retry sync", color = MaterialTheme.colorScheme.primary)
                             }
                         }
                     }
@@ -116,9 +135,9 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(24.dp))
 
                 // ── Security Section ──
-                SectionHeader(text = "SECURITY")
+                SectionHeader(text = "Security")
                 Surface(
-                    shape = RoundedCornerShape(24.dp),
+                    shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -126,8 +145,60 @@ fun SettingsScreen(
                         SecuritySettingsSection(
                             trustedCertificates = uiState.trustedCertificates,
                             isAppLockEnabled = uiState.isAppLockEnabled,
+                            lockMethod = uiState.lockMethod,
+                            isBiometricAvailable = uiState.isBiometricAvailable,
+                            hasPin = uiState.hasPin,
                             onRevokeCertificate = { viewModel.revokeCertificate(it) },
-                            onAppLockToggle = { viewModel.setAppLockEnabled(it) },
+                            onAppLockToggle = { enabled ->
+                                if (!enabled) {
+                                    viewModel.setAppLockEnabled(false)
+                                } else if (
+                                    uiState.lockMethod == LockMethod.BIOMETRIC &&
+                                    uiState.isBiometricAvailable &&
+                                    activity != null
+                                ) {
+                                    val prompt = BiometricPrompt.Builder(activity)
+                                        .setTitle("Enable App Lock")
+                                        .setSubtitle("Confirm your biometric identity")
+                                        .setNegativeButton(
+                                            "Cancel",
+                                            ContextCompat.getMainExecutor(activity),
+                                        ) { _, _ -> }
+                                        .build()
+                                    val hasBiometricPermission =
+                                        ActivityCompat.checkSelfPermission(
+                                            activity,
+                                            android.Manifest.permission.USE_BIOMETRIC,
+                                        ) == PackageManager.PERMISSION_GRANTED ||
+                                                ActivityCompat.checkSelfPermission(
+                                                    activity,
+                                                    android.Manifest.permission.USE_FINGERPRINT,
+                                                ) == PackageManager.PERMISSION_GRANTED
+                                    if (hasBiometricPermission) {
+                                        try {
+                                            prompt.authenticate(
+                                                CancellationSignal(),
+                                                ContextCompat.getMainExecutor(activity),
+                                                object : BiometricPrompt.AuthenticationCallback() {
+                                                    override fun onAuthenticationSucceeded(
+                                                        result: BiometricPrompt.AuthenticationResult?,
+                                                    ) {
+                                                        viewModel.setAppLockEnabled(true)
+                                                    }
+                                                },
+                                            )
+                                        } catch (_: SecurityException) {
+                                            viewModel.setAppLockEnabled(false)
+                                        }
+                                    } else {
+                                        viewModel.setAppLockEnabled(false)
+                                    }
+                                } else {
+                                    viewModel.setAppLockEnabled(true)
+                                }
+                            },
+                            onLockMethodSelected = { viewModel.setLockMethod(it) },
+                            onSavePin = { viewModel.savePin(it) },
                         )
                     }
                 }
@@ -142,12 +213,12 @@ fun SettingsScreen(
                         contentColor = MaterialTheme.colorScheme.error
                     ),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.medium,
                     contentPadding = PaddingValues(16.dp)
                 ) {
                     Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("LOG OUT OF SESSION", style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.sp))
+                    Text("Log out", style = MaterialTheme.typography.labelLarge)
                 }
 
                 Spacer(modifier = Modifier.height(48.dp))
@@ -158,20 +229,20 @@ fun SettingsScreen(
     if (showLogoutDialog) {
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
-            title = { Text("UNLINK ACCOUNT", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)) },
+            title = { Text("Log out?", style = MaterialTheme.typography.titleLarge) },
             text = { Text("This will clear your local session and all cached data. You'll need to sign in again to access your photos.") },
             confirmButton = {
                 TextButton(onClick = { viewModel.logout() }) {
-                    Text("LOG OUT", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                    Text("Log out", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Medium)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showLogoutDialog = false }) {
-                    Text("CANCEL")
+                    Text("Cancel")
                 }
             },
             containerColor = ImageNextSurface,
-            shape = RoundedCornerShape(28.dp)
+            shape = RoundedCornerShape(16.dp)
         )
     }
 }
@@ -180,8 +251,8 @@ fun SettingsScreen(
 private fun SectionHeader(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Bold),
-        color = MaterialTheme.colorScheme.primary,
+        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 8.dp, bottom = 12.dp),
     )
 }
@@ -208,7 +279,7 @@ private fun SettingsRow(
             modifier = Modifier
                 .size(36.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
             icon()
@@ -273,4 +344,14 @@ private fun syncStateLabel(syncState: SyncState): String = when (syncState) {
     SyncState.Partial -> "Partially complete"
     SyncState.Failed -> "Failed"
     SyncState.Completed -> "Up to date"
+}
+
+private fun connectionStatusLabel(connectionStatus: ConnectionStatus): String = when (connectionStatus) {
+    ConnectionStatus.CONNECTED -> "Connected"
+    ConnectionStatus.NOT_CONNECTED -> "Not connected"
+}
+
+private fun connectionStatusIconTint(connectionStatus: ConnectionStatus): Color = when (connectionStatus) {
+    ConnectionStatus.CONNECTED -> Color(0xFF2E7D32)
+    ConnectionStatus.NOT_CONNECTED -> Color(0xFFC62828)
 }

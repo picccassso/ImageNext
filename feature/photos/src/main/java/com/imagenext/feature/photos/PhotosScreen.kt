@@ -10,7 +10,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
@@ -204,9 +203,9 @@ private fun PhotosGrid(
         state = gridState,
         flingBehavior = flingBehavior,
         modifier = modifier,
-        contentPadding = PaddingValues(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(1.5.dp),
+        horizontalArrangement = Arrangement.spacedBy(1.5.dp),
+        verticalArrangement = Arrangement.spacedBy(1.5.dp),
     ) {
         items(
             count = pagingItems.itemCount,
@@ -235,12 +234,11 @@ private fun PhotosGrid(
                 is TimelineItem.Header -> {
                     Text(
                         text = item.label,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.Medium,
                         ),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 14.dp, top = 20.dp, bottom = 6.dp),
                     )
                 }
                 is TimelineItem.Photo -> {
@@ -255,7 +253,7 @@ private fun PhotosGrid(
                     Box(
                         modifier = Modifier
                             .aspectRatio(1f)
-                            .clip(RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(2.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
                     )
                 }
@@ -298,13 +296,8 @@ private fun ThumbnailCell(
     Box(
         modifier = modifier
             .aspectRatio(1f)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(2.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(
-                width = 0.5.dp,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
-                shape = RoundedCornerShape(16.dp)
-            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -337,12 +330,9 @@ private fun LoadingState() {
             )
             Spacer(modifier = Modifier.height(24.dp))
             Text(
-                text = "DISCOVERING MOMENTS",
-                style = MaterialTheme.typography.labelLarge.copy(
-                    letterSpacing = 2.sp,
-                    fontWeight = FontWeight.Light
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                text = "Loading photos...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             )
         }
     }
@@ -359,7 +349,7 @@ private fun EmptyState(syncState: SyncState) {
                 imageVector = Icons.Default.PhotoLibrary,
                 contentDescription = null,
                 modifier = Modifier.size(80.dp),
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
             )
             Spacer(modifier = Modifier.height(32.dp))
             Text(
@@ -368,7 +358,7 @@ private fun EmptyState(syncState: SyncState) {
                 } else {
                     "Gallery is empty"
                 },
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.titleMedium,
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -414,11 +404,11 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
             Spacer(modifier = Modifier.height(32.dp))
             Button(
                 onClick = onRetry,
-                shape = RoundedCornerShape(12.dp),
+                shape = MaterialTheme.shapes.small,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 contentPadding = PaddingValues(horizontal = 32.dp, vertical = 12.dp)
             ) {
-                Text("RETRY CONNECTION", style = MaterialTheme.typography.labelLarge)
+                Text("Retry", style = MaterialTheme.typography.labelLarge)
             }
         }
     }

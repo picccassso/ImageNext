@@ -60,11 +60,8 @@ fun LoginScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "AUTHENTICATION",
-                style = MaterialTheme.typography.labelLarge.copy(
-                    letterSpacing = 2.sp,
-                    fontWeight = FontWeight.Light
-                ),
+                text = "Authentication",
+                style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )
             
@@ -90,8 +87,8 @@ fun LoginScreen(
                 CircularProgressIndicator(strokeWidth = 3.dp, modifier = Modifier.size(40.dp))
                 Spacer(modifier = Modifier.height(24.dp))
                 Text(
-                    text = "ESTABLISHING SESSION",
-                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
+                    text = "Signing in...",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
             } else if (!showManualForm) {
@@ -101,14 +98,14 @@ fun LoginScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.medium,
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
                     Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = "SIGN IN WITH BROWSER",
-                        style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.sp)
+                        text = "Sign in with browser",
+                        style = MaterialTheme.typography.labelLarge
                     )
                 }
 
@@ -118,15 +115,15 @@ fun LoginScreen(
                     onClick = { showManualForm = true },
                 ) {
                     Text(
-                        text = "USE APP PASSWORD INSTEAD",
-                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
+                        text = "Use app password instead",
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 }
             } else {
                 // Fallback: Manual app-password form
                 Surface(
-                    shape = RoundedCornerShape(24.dp),
+                    shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -189,12 +186,12 @@ fun LoginScreen(
                         .fillMaxWidth()
                         .height(56.dp),
                     enabled = username.isNotBlank() && appPassword.isNotBlank(),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.medium,
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
                     Text(
-                        text = "SIGN IN",
-                        style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.sp)
+                        text = "Sign in",
+                        style = MaterialTheme.typography.labelLarge
                     )
                 }
 
@@ -205,8 +202,8 @@ fun LoginScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        text = "BACK TO BROWSER LOGIN",
-                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
+                        text = "Back to browser login",
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 }

@@ -1,12 +1,12 @@
 package com.imagenext.navigation
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
@@ -72,22 +72,16 @@ fun AppNavHost(
         startDestination = startDestination,
         modifier = modifier,
         enterTransition = {
-            slideInHorizontally(
-                initialOffsetX = { it / 10 },
-                animationSpec = tween(Motion.DURATION_LONG_MS, easing = Motion.Easing.Emphasized)
-            ) + fadeIn(animationSpec = tween(Motion.DURATION_LONG_MS))
+            fadeIn(animationSpec = tween(250, easing = Motion.Easing.Emphasized))
         },
         exitTransition = {
-            fadeOut(animationSpec = tween(Motion.DURATION_MEDIUM_MS))
+            fadeOut(animationSpec = tween(200))
         },
         popEnterTransition = {
-            slideInHorizontally(
-                initialOffsetX = { -it / 10 },
-                animationSpec = tween(Motion.DURATION_LONG_MS, easing = Motion.Easing.Emphasized)
-            ) + fadeIn(animationSpec = tween(Motion.DURATION_LONG_MS))
+            fadeIn(animationSpec = tween(250, easing = Motion.Easing.Emphasized))
         },
         popExitTransition = {
-            fadeOut(animationSpec = tween(Motion.DURATION_MEDIUM_MS))
+            fadeOut(animationSpec = tween(200))
         }
     ) {
         // ... (rest of the routes same but with localized transition tuning if needed)
@@ -99,15 +93,39 @@ fun AppNavHost(
             ),
             enterTransition = {
                 scaleIn(
-                    initialScale = 0.9f,
-                    animationSpec = tween(Motion.DURATION_LONG_MS, easing = Motion.Easing.Emphasized)
-                ) + fadeIn(animationSpec = tween(Motion.DURATION_LONG_MS))
+                    initialScale = 0.92f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessLow,
+                    )
+                ) + fadeIn(animationSpec = tween(200))
             },
             exitTransition = {
                 scaleOut(
-                    targetScale = 0.9f,
-                    animationSpec = tween(Motion.DURATION_MEDIUM_MS, easing = Motion.Easing.Decelerate)
-                ) + fadeOut(animationSpec = tween(Motion.DURATION_MEDIUM_MS))
+                    targetScale = 0.92f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow,
+                    )
+                ) + fadeOut(animationSpec = tween(150))
+            },
+            popEnterTransition = {
+                scaleIn(
+                    initialScale = 0.92f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow,
+                    )
+                ) + fadeIn(animationSpec = tween(200))
+            },
+            popExitTransition = {
+                scaleOut(
+                    targetScale = 0.92f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow,
+                    )
+                ) + fadeOut(animationSpec = tween(150))
             }
         ) { backStackEntry ->
             val encodedPath = backStackEntry.arguments?.getString("remotePath") ?: ""
@@ -201,6 +219,7 @@ fun AppNavHost(
             val settingsViewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModelFactory(
                     sessionRepository = app.sessionRepository,
+                    authApi = app.authApi,
                     folderRepository = app.folderRepository,
                     syncOrchestrator = app.syncOrchestrator,
                     certificateTrustStore = app.certificateTrustStore,

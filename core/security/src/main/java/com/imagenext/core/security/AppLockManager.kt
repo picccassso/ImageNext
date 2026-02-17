@@ -2,7 +2,9 @@ package com.imagenext.core.security
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.os.SystemClock
+import java.security.MessageDigest
 
 /**
  * App lock policy abstraction.
@@ -22,6 +24,7 @@ class AppLockManager(context: Context) {
         PREFS_FILE_NAME,
         Context.MODE_PRIVATE,
     )
+    private val packageManager: PackageManager = context.packageManager
 
     /** Timestamp (elapsed realtime millis) when app was last paused. */
     @Volatile
@@ -48,6 +51,42 @@ class AppLockManager(context: Context) {
         if (!enabled) {
             lockPending = false
         }
+    }
+
+    /** Returns the currently selected lock method. */
+    fun getLockMethod(): LockMethod {
+        val stored = prefs.getString(KEY_LOCK_METHOD, LockMethod.PIN.name) ?: LockMethod.PIN.name
+        return LockMethod.entries.firstOrNull { it.name == stored } ?: LockMethod.PIN
+    }
+
+    /** Sets the lock method used on unlock. */
+    fun setLockMethod(method: LockMethod) {
+        prefs.edit()
+            .putString(KEY_LOCK_METHOD, method.name)
+            .apply()
+    }
+
+    /** Returns true if a biometric authenticator is available on the device. */
+    fun isBiometricAvailable(): Boolean {
+        return packageManager.hasSystemFeature(PackageManager.FEATURE_FINGERPRINT)
+    }
+
+    /** Stores a PIN hash for local app unlock. */
+    fun setPin(pin: String) {
+        prefs.edit()
+            .putString(KEY_PIN_HASH, hashPin(pin))
+            .apply()
+    }
+
+    /** Returns true if a PIN has been configured. */
+    fun hasPin(): Boolean {
+        return !prefs.getString(KEY_PIN_HASH, null).isNullOrBlank()
+    }
+
+    /** Returns true if the input PIN matches the stored PIN hash. */
+    fun verifyPin(pin: String): Boolean {
+        val storedHash = prefs.getString(KEY_PIN_HASH, null) ?: return false
+        return hashPin(pin) == storedHash
     }
 
     /**
@@ -117,6 +156,19 @@ class AppLockManager(context: Context) {
         const val PREFS_FILE_NAME = "imagenext_app_lock"
         const val KEY_LOCK_ENABLED = "lock_enabled"
         const val KEY_LOCK_TIMEOUT_MS = "lock_timeout_ms"
+        const val KEY_LOCK_METHOD = "lock_method"
+        const val KEY_PIN_HASH = "pin_hash"
         const val DEFAULT_LOCK_TIMEOUT_MS = 5 * 60 * 1000L // 5 minutes
     }
+
+    private fun hashPin(pin: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val bytes = digest.digest(pin.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+}
+
+enum class LockMethod {
+    PIN,
+    BIOMETRIC,
 }

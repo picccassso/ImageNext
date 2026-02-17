@@ -41,16 +41,16 @@ fun WelcomeScreen(
                 imageVector = Icons.Default.AutoAwesome,
                 contentDescription = null,
                 modifier = Modifier.size(80.dp),
-                tint = MaterialTheme.colorScheme.primary
+                tint = MaterialTheme.colorScheme.onSurface
             )
             
             Spacer(modifier = Modifier.height(40.dp))
 
             Text(
-                text = "IMAGENEXT",
-                style = MaterialTheme.typography.displaySmall.copy(
-                    fontWeight = FontWeight.Light,
-                    letterSpacing = 8.sp,
+                text = "ImageNext",
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontWeight = FontWeight.Normal,
+                    letterSpacing = 1.sp,
                     color = MaterialTheme.colorScheme.onBackground
                 ),
                 textAlign = TextAlign.Center
@@ -74,7 +74,7 @@ fun WelcomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
-                shape = RoundedCornerShape(16.dp),
+                shape = MaterialTheme.shapes.medium,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
@@ -82,15 +82,15 @@ fun WelcomeScreen(
                 elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
             ) {
                 Text(
-                    text = "GET STARTED",
-                    style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 2.sp)
+                    text = "Get started",
+                    style = MaterialTheme.typography.labelLarge
                 )
             }
         }
         
         Text(
-            text = "v1.0 PREMIUM",
-            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
+            text = "v1.0",
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
             modifier = Modifier
                 .align(Alignment.BottomCenter)

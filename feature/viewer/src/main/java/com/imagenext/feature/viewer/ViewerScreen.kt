@@ -6,6 +6,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -36,9 +39,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -62,6 +65,7 @@ import com.imagenext.designsystem.ImageNextAccent
 import com.imagenext.designsystem.ImageNextBlack
 import com.imagenext.designsystem.ImageNextWhite
 import com.imagenext.designsystem.Motion
+import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -162,11 +166,11 @@ private fun ViewerContent(
 
         PrefetchLayer(prefetchSources = state.prefetchSources)
 
-        // Top bar overlay with premium translucency
+        // Top bar overlay
         AnimatedVisibility(
             visible = showChrome,
-            enter = fadeIn(animationSpec = tween(Motion.DURATION_MEDIUM_MS)),
-            exit = fadeOut(animationSpec = tween(Motion.DURATION_MEDIUM_MS)),
+            enter = fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
+            exit = fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
         ) {
             TopAppBar(
                 title = {
@@ -175,7 +179,7 @@ private fun ViewerContent(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         color = ImageNextWhite,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.titleMedium
                     )
                 },
                 navigationIcon = {
@@ -197,7 +201,7 @@ private fun ViewerContent(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = ImageNextBlack.copy(alpha = 0.6f),
+                    containerColor = ImageNextBlack.copy(alpha = 0.4f),
                 ),
             )
         }
@@ -247,15 +251,16 @@ private fun ZoomableImage(
     imageSource: ViewerImageSource?,
     onTap: () -> Unit,
 ) {
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
+    val scale = remember { Animatable(1f) }
+    val offsetX = remember { Animatable(0f) }
+    val offsetY = remember { Animatable(0f) }
+    val coroutineScope = rememberCoroutineScope()
 
     // Reset zoom state when the media item changes
     LaunchedEffect(mediaItem.remotePath) {
-        scale = 1f
-        offsetX = 0f
-        offsetY = 0f
+        scale.snapTo(1f)
+        offsetX.snapTo(0f)
+        offsetY.snapTo(0f)
     }
 
     val context = LocalContext.current
@@ -272,40 +277,44 @@ private fun ZoomableImage(
             .fillMaxSize()
             .pointerInput(mediaItem.remotePath) {
                 detectTransformGestures { _, pan, zoom, _ ->
-                    val newScale = (scale * zoom).coerceIn(MIN_SCALE, MAX_SCALE)
-                    if (newScale > MIN_SCALE) {
-                        // Allow panning only when zoomed in
-                        val maxX = (newScale - 1f) * size.width / 2f
-                        val maxY = (newScale - 1f) * size.height / 2f
-                        offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
-                        offsetY = (offsetY + pan.y).coerceIn(-maxY, maxY)
-                    } else {
-                        offsetX = 0f
-                        offsetY = 0f
+                    val newScale = (scale.value * zoom).coerceIn(MIN_SCALE, MAX_SCALE)
+                    coroutineScope.launch {
+                        if (newScale > MIN_SCALE) {
+                            val maxX = (newScale - 1f) * size.width / 2f
+                            val maxY = (newScale - 1f) * size.height / 2f
+                            scale.snapTo(newScale)
+                            offsetX.snapTo((offsetX.value + pan.x).coerceIn(-maxX, maxX))
+                            offsetY.snapTo((offsetY.value + pan.y).coerceIn(-maxY, maxY))
+                        } else {
+                            scale.snapTo(newScale)
+                            offsetX.snapTo(0f)
+                            offsetY.snapTo(0f)
+                        }
                     }
-                    scale = newScale
                 }
             }
             .pointerInput(mediaItem.remotePath) {
                 detectTapGestures(
                     onTap = { onTap() },
                     onDoubleTap = { tapOffset ->
-                        if (scale > MIN_SCALE) {
-                            // Reset to default
-                            scale = MIN_SCALE
-                            offsetX = 0f
-                            offsetY = 0f
-                        } else {
-                            // Zoom to double-tap level centered on tap point
-                            scale = DOUBLE_TAP_SCALE
-                            val centerX = size.width / 2f
-                            val centerY = size.height / 2f
-                            val maxX = (DOUBLE_TAP_SCALE - 1f) * size.width / 2f
-                            val maxY = (DOUBLE_TAP_SCALE - 1f) * size.height / 2f
-                            offsetX = ((centerX - tapOffset.x) * (DOUBLE_TAP_SCALE - 1f))
-                                .coerceIn(-maxX, maxX)
-                            offsetY = ((centerY - tapOffset.y) * (DOUBLE_TAP_SCALE - 1f))
-                                .coerceIn(-maxY, maxY)
+                        coroutineScope.launch {
+                            if (scale.value > MIN_SCALE) {
+                                launch { scale.animateTo(MIN_SCALE, Motion.ZoomSpring) }
+                                launch { offsetX.animateTo(0f, Motion.ZoomSpring) }
+                                launch { offsetY.animateTo(0f, Motion.ZoomSpring) }
+                            } else {
+                                val centerX = size.width / 2f
+                                val centerY = size.height / 2f
+                                val maxX = (DOUBLE_TAP_SCALE - 1f) * size.width / 2f
+                                val maxY = (DOUBLE_TAP_SCALE - 1f) * size.height / 2f
+                                val targetX = ((centerX - tapOffset.x) * (DOUBLE_TAP_SCALE - 1f))
+                                    .coerceIn(-maxX, maxX)
+                                val targetY = ((centerY - tapOffset.y) * (DOUBLE_TAP_SCALE - 1f))
+                                    .coerceIn(-maxY, maxY)
+                                launch { scale.animateTo(DOUBLE_TAP_SCALE, Motion.ZoomSpring) }
+                                launch { offsetX.animateTo(targetX, Motion.ZoomSpring) }
+                                launch { offsetY.animateTo(targetY, Motion.ZoomSpring) }
+                            }
                         }
                     },
                 )
@@ -320,10 +329,10 @@ private fun ZoomableImage(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = offsetX,
-                        translationY = offsetY,
+                        scaleX = scale.value,
+                        scaleY = scale.value,
+                        translationX = offsetX.value,
+                        translationY = offsetY.value,
                     ),
             )
         } else {
@@ -400,7 +409,7 @@ private fun MetadataOverlay(mediaItem: MediaItem) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(ImageNextBlack.copy(alpha = 0.8f))
+            .background(ImageNextBlack.copy(alpha = 0.6f))
             .padding(20.dp),
     ) {
         Text(

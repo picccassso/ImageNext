@@ -48,11 +48,8 @@ fun ServerSetupScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "SERVER SETUP",
-                style = MaterialTheme.typography.labelLarge.copy(
-                    letterSpacing = 2.sp,
-                    fontWeight = FontWeight.Light
-                ),
+                text = "Server setup",
+                style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )
             
@@ -76,7 +73,7 @@ fun ServerSetupScreen(
             Spacer(modifier = Modifier.height(40.dp))
 
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = MaterialTheme.shapes.medium,
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -103,7 +100,7 @@ fun ServerSetupScreen(
                         unfocusedBorderColor = Color.Transparent,
                         cursorColor = MaterialTheme.colorScheme.primary
                     ),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = MaterialTheme.shapes.medium
                 )
             }
 
@@ -118,12 +115,12 @@ fun ServerSetupScreen(
                         .fillMaxWidth()
                         .height(56.dp),
                     enabled = serverUrl.isNotBlank(),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.medium,
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
                 ) {
                     Text(
-                        text = "CONNECT",
-                        style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.sp)
+                        text = "Connect",
+                        style = MaterialTheme.typography.labelLarge
                     )
                 }
             }
