@@ -22,10 +22,10 @@ object Motion {
     /** Complex orchestrated animations. */
     const val DURATION_EXTRA_LONG_MS = 600
 
-    /** Spring for viewer open/close — slightly bouncy for natural feel. */
+    /** Spring for viewer open/close — critically damped, smooth settle with no overshoot. */
     val ViewerSpring: SpringSpec<Float> = spring(
-        dampingRatio = Spring.DampingRatioLowBouncy,
-        stiffness = Spring.StiffnessLow,
+        dampingRatio = Spring.DampingRatioNoBouncy,
+        stiffness = 300f,
     )
 
     /** Spring for zoom animations — snappy with no overshoot. */
@@ -46,5 +46,8 @@ object Motion {
 
         /** Easing for general movements within the screen. */
         val Standard: androidx.compose.animation.core.Easing = CubicBezierEasing(0.2f, 0.0f, 0.8f, 1.0f)
+
+        /** Easing for elements leaving the screen — starts fast for a snappy dismiss. */
+        val Accelerate: androidx.compose.animation.core.Easing = CubicBezierEasing(0.4f, 0.0f, 1.0f, 1.0f)
     }
 }

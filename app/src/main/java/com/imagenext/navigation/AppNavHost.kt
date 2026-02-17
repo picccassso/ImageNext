@@ -1,12 +1,10 @@
 package com.imagenext.navigation
 
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
@@ -31,6 +29,7 @@ import com.imagenext.feature.folders.FolderSelectionViewModelFactory
 import com.imagenext.feature.onboarding.OnboardingScreen
 import com.imagenext.feature.onboarding.OnboardingViewModel
 import com.imagenext.feature.onboarding.OnboardingViewModelFactory
+import com.imagenext.feature.photos.PhotoOpenRequest
 import com.imagenext.feature.photos.PhotosScreen
 import com.imagenext.feature.photos.PhotosViewModel
 import com.imagenext.feature.photos.PhotosViewModelFactory
@@ -50,12 +49,23 @@ object NavRoutes {
     const val PHOTOS = "photos"
     const val ALBUMS = "albums"
     const val SETTINGS = "settings"
-    const val VIEWER = "viewer/{remotePath}"
+    private const val ORIGIN_LEFT = "originLeft"
+    private const val ORIGIN_TOP = "originTop"
+    private const val ORIGIN_WIDTH = "originWidth"
+    private const val ORIGIN_HEIGHT = "originHeight"
+    const val VIEWER =
+        "viewer/{remotePath}?$ORIGIN_LEFT={$ORIGIN_LEFT}&$ORIGIN_TOP={$ORIGIN_TOP}" +
+            "&$ORIGIN_WIDTH={$ORIGIN_WIDTH}&$ORIGIN_HEIGHT={$ORIGIN_HEIGHT}"
 
     /** Builds a viewer route for a specific media item. */
-    fun viewerRoute(remotePath: String): String {
-        val encoded = URLEncoder.encode(remotePath, "UTF-8")
-        return "viewer/$encoded"
+    fun viewerRoute(request: PhotoOpenRequest): String {
+        val encoded = URLEncoder.encode(request.remotePath, "UTF-8")
+        val origin = request.originBounds
+        val left = origin?.left ?: -1
+        val top = origin?.top ?: -1
+        val width = origin?.width ?: -1
+        val height = origin?.height ?: -1
+        return "viewer/$encoded?$ORIGIN_LEFT=$left&$ORIGIN_TOP=$top&$ORIGIN_WIDTH=$width&$ORIGIN_HEIGHT=$height"
     }
 }
 
@@ -84,49 +94,19 @@ fun AppNavHost(
             fadeOut(animationSpec = tween(200))
         }
     ) {
-        // ... (rest of the routes same but with localized transition tuning if needed)
-        // Fullscreen viewer gets special scale transition
         composable(
             route = NavRoutes.VIEWER,
             arguments = listOf(
                 navArgument("remotePath") { type = NavType.StringType },
+                navArgument("originLeft") { type = NavType.IntType; defaultValue = -1 },
+                navArgument("originTop") { type = NavType.IntType; defaultValue = -1 },
+                navArgument("originWidth") { type = NavType.IntType; defaultValue = -1 },
+                navArgument("originHeight") { type = NavType.IntType; defaultValue = -1 },
             ),
-            enterTransition = {
-                scaleIn(
-                    initialScale = 0.92f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessLow,
-                    )
-                ) + fadeIn(animationSpec = tween(200))
-            },
-            exitTransition = {
-                scaleOut(
-                    targetScale = 0.92f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    )
-                ) + fadeOut(animationSpec = tween(150))
-            },
-            popEnterTransition = {
-                scaleIn(
-                    initialScale = 0.92f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    )
-                ) + fadeIn(animationSpec = tween(200))
-            },
-            popExitTransition = {
-                scaleOut(
-                    targetScale = 0.92f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    )
-                ) + fadeOut(animationSpec = tween(150))
-            }
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
         ) { backStackEntry ->
             val encodedPath = backStackEntry.arguments?.getString("remotePath") ?: ""
             val remotePath = URLDecoder.decode(encodedPath, "UTF-8")
@@ -187,7 +167,13 @@ fun AppNavHost(
             }
         }
 
-        composable(route = BottomNavDestination.Photos.route) {
+        composable(
+            route = BottomNavDestination.Photos.route,
+            enterTransition = { EnterTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
             val photosViewModel: PhotosViewModel = viewModel(
                 factory = PhotosViewModelFactory(
                     timelineRepository = app.timelineRepository,
@@ -196,8 +182,8 @@ fun AppNavHost(
             )
             PhotosScreen(
                 viewModel = photosViewModel,
-                onPhotoClick = { remotePath ->
-                    navController.navigate(NavRoutes.viewerRoute(remotePath))
+                onPhotoClick = { request ->
+                    navController.navigate(NavRoutes.viewerRoute(request))
                 },
             )
         }

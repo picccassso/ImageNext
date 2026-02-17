@@ -46,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -58,12 +59,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
@@ -80,21 +87,28 @@ import java.io.File
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import kotlin.math.roundToInt
 
 private const val GRID_COLUMNS = 3
 private const val GRID_PREVIEW_SIZE = 256
 private const val PERF_TAG = "ImageNextPerf"
 private const val MAX_FLING_VELOCITY_PX_PER_SECOND = 8500f
 
+data class PhotoOpenRequest(
+    val remotePath: String,
+    val originBounds: IntRect? = null,
+)
+
 @OptIn(androidx.compose.material.ExperimentalMaterialApi::class)
 @Composable
 fun PhotosScreen(
     viewModel: PhotosViewModel,
-    onPhotoClick: (String) -> Unit = {},
+    onPhotoClick: (PhotoOpenRequest) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val screenStartMs = remember { SystemClock.elapsedRealtime() }
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
     val defaultFlingBehavior = ScrollableDefaults.flingBehavior()
     val gridFlingBehavior = remember(defaultFlingBehavior) {
@@ -143,6 +157,16 @@ fun PhotosScreen(
     var loggedInitialLoadDone by remember { mutableStateOf(false) }
     var loggedFirstItemsVisible by remember { mutableStateOf(false) }
 
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                viewModel.onPhotosForegrounded()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     LaunchedEffect(pagingItems.itemCount) {
         if (pagingItems.itemCount > 0) {
             hasDisplayedPhotos = true
@@ -167,7 +191,7 @@ fun PhotosScreen(
             .pullRefresh(pullRefreshState),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            SyncStatusBar(syncState = syncState, onRetry = { viewModel.retrySync() })
+            SyncStatusBar(syncState = syncState)
 
             when {
                 isInitialLoad -> LoadingState()
@@ -223,7 +247,7 @@ private fun PhotosGrid(
     gridState: LazyGridState,
     flingBehavior: FlingBehavior,
     allowRemotePreview: Boolean,
-    onPhotoClick: (String) -> Unit,
+    onPhotoClick: (PhotoOpenRequest) -> Unit,
     remotePreviewAuth: RemotePreviewAuth?,
     modifier: Modifier = Modifier,
 ) {
@@ -275,7 +299,14 @@ private fun PhotosGrid(
                         mediaItem = item.mediaItem,
                         remotePreviewAuth = remotePreviewAuth,
                         allowRemotePreview = allowRemotePreview,
-                        onClick = { onPhotoClick(item.mediaItem.remotePath) },
+                        onClick = { originBounds ->
+                            onPhotoClick(
+                                PhotoOpenRequest(
+                                    remotePath = item.mediaItem.remotePath,
+                                    originBounds = originBounds,
+                                )
+                            )
+                        },
                     )
                 }
                 null -> {
@@ -304,10 +335,11 @@ private fun ThumbnailCell(
     mediaItem: MediaItem,
     remotePreviewAuth: RemotePreviewAuth?,
     allowRemotePreview: Boolean,
-    onClick: () -> Unit,
+    onClick: (IntRect?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    var cellBounds by remember(mediaItem.remotePath) { mutableStateOf<IntRect?>(null) }
     val thumbnailModel = remember(
         mediaItem.remotePath,
         mediaItem.thumbnailPath,
@@ -327,7 +359,16 @@ private fun ThumbnailCell(
             .aspectRatio(1f)
             .clip(RoundedCornerShape(2.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick),
+            .onGloballyPositioned { coordinates ->
+                val bounds = coordinates.boundsInWindow()
+                cellBounds = IntRect(
+                    left = bounds.left.roundToInt(),
+                    top = bounds.top.roundToInt(),
+                    right = bounds.right.roundToInt(),
+                    bottom = bounds.bottom.roundToInt(),
+                )
+            }
+            .clickable { onClick(cellBounds) },
         contentAlignment = Alignment.Center,
     ) {
         if (thumbnailModel != null) {
@@ -444,45 +485,18 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun SyncStatusBar(syncState: SyncState, onRetry: () -> Unit) {
+private fun SyncStatusBar(syncState: SyncState) {
     AnimatedVisibility(
-        visible = syncState != SyncState.Idle && syncState != SyncState.Completed,
+        visible = syncState == SyncState.Running,
         enter = slideInVertically { -it } + fadeIn(),
         exit = slideOutVertically { -it } + fadeOut()
     ) {
-        when (syncState) {
-            SyncState.Running -> {
-                Box(modifier = Modifier.fillMaxWidth().height(2.dp)) {
-                    LinearProgressIndicator(
-                        modifier = Modifier.fillMaxSize(),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = Color.Transparent
-                    )
-                }
-            }
-            SyncState.Failed, SyncState.Partial -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        text = if (syncState == SyncState.Failed) "Sync failed" else "Partial sync",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.CenterStart)
-                    )
-                    TextButton(
-                        onClick = onRetry,
-                        modifier = Modifier.align(Alignment.CenterEnd),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                    ) {
-                        Text("RETRY", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-            else -> {}
+        Box(modifier = Modifier.fillMaxWidth().height(2.dp)) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = Color.Transparent
+            )
         }
     }
 }

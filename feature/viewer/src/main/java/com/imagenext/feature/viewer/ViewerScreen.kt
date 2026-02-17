@@ -1,6 +1,7 @@
 package com.imagenext.feature.viewer
 
 import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -9,7 +10,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -38,6 +38,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +48,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -60,6 +62,7 @@ import coil3.compose.AsyncImage
 import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
 import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.imagenext.core.model.MediaItem
 import com.imagenext.designsystem.ImageNextAccent
 import com.imagenext.designsystem.ImageNextBlack
@@ -92,35 +95,45 @@ fun ViewerScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black),
+        modifier = modifier.fillMaxSize(),
     ) {
         when (val state = uiState) {
             is ViewerUiState.Loading -> {
-                CircularProgressIndicator(
-                    color = Color.White,
-                    modifier = Modifier.align(Alignment.Center),
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                    )
+                }
             }
 
             is ViewerUiState.Error -> {
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Photo,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.5f),
-                        modifier = Modifier.size(64.dp),
-                    )
-                    Text(
-                        text = state.message,
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(top = 16.dp),
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Photo,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.size(64.dp),
+                        )
+                        Text(
+                            text = state.message,
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(top = 16.dp),
+                        )
+                    }
                 }
             }
 
@@ -148,6 +161,9 @@ private fun ViewerContent(
         initialPage = state.currentIndex,
         pageCount = { state.items.size },
     )
+    val coroutineScope = rememberCoroutineScope()
+    val transitionProgress = remember { Animatable(0f) }
+    var isClosingTransition by remember { mutableStateOf(false) }
 
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }.collect { page ->
@@ -157,18 +173,72 @@ private fun ViewerContent(
 
     var showChrome by remember { mutableStateOf(true) }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    LaunchedEffect(Unit) {
+        transitionProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = Motion.ViewerSpring,
+        )
+    }
+
+    // derivedStateOf so downstream only recomposes when the Boolean flips, not every frame
+    val transitionRunning by remember {
+        derivedStateOf { transitionProgress.value < 1f || isClosingTransition }
+    }
+
+    fun onBackRequested() {
+        if (isClosingTransition) return
+        showChrome = false
+        isClosingTransition = true
+        coroutineScope.launch {
+            transitionProgress.animateTo(
+                targetValue = 0f,
+                animationSpec = Motion.ViewerSpring,
+            )
+            onBack()
+        }
+    }
+
+    BackHandler(onBack = ::onBackRequested)
+
+    // All transitionProgress reads are deferred to the draw phase via graphicsLayer / drawBehind.
+    // This avoids recomposing the entire ViewerContent tree on every animation frame.
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .drawBehind {
+                // Scrim — deferred to draw phase, no recomposition
+                drawRect(Color.Black.copy(alpha = transitionProgress.value))
+            }
+    ) {
+        // Transition modifier — scale + alpha deferred to draw time, no clip (GPU-expensive)
+        // Transition modifier — fade only, no scale (appears in-place instantly)
+        val transitionModifier = remember(transitionProgress) {
+            Modifier.graphicsLayer {
+                alpha = transitionProgress.value.coerceIn(0f, 1f)
+            }
+        }
+
         ViewerPager(
             pagerState = pagerState,
             state = state,
-            onTap = { showChrome = !showChrome },
+            onTap = {
+                if (!transitionRunning) {
+                    showChrome = !showChrome
+                }
+            },
+            interactionsEnabled = !transitionRunning,
+            modifier = transitionModifier,
         )
 
         PrefetchLayer(prefetchSources = state.prefetchSources)
 
-        // Top bar overlay
+        // Top bar overlay — chrome fades in once transition is well underway
+        val chromeReady by remember {
+            derivedStateOf { !isClosingTransition && transitionProgress.value > 0.7f }
+        }
         AnimatedVisibility(
-            visible = showChrome,
+            visible = showChrome && chromeReady,
             enter = fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
             exit = fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
         ) {
@@ -183,7 +253,7 @@ private fun ViewerContent(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = ::onBackRequested) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
@@ -223,12 +293,15 @@ private fun ViewerPager(
     pagerState: PagerState,
     state: ViewerUiState.Content,
     onTap: () -> Unit,
+    interactionsEnabled: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val items = state.items
     HorizontalPager(
         state = pagerState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize(),
         beyondViewportPageCount = PREFETCH_WINDOW,
+        userScrollEnabled = interactionsEnabled,
         key = { items[it].remotePath },
     ) { page ->
         val mediaItem = items[page]
@@ -241,6 +314,7 @@ private fun ViewerPager(
             mediaItem = mediaItem,
             imageSource = imageSource,
             onTap = onTap,
+            interactionsEnabled = interactionsEnabled,
         )
     }
 }
@@ -250,6 +324,7 @@ private fun ZoomableImage(
     mediaItem: MediaItem,
     imageSource: ViewerImageSource?,
     onTap: () -> Unit,
+    interactionsEnabled: Boolean,
 ) {
     val scale = remember { Animatable(1f) }
     val offsetX = remember { Animatable(0f) }
@@ -264,17 +339,29 @@ private fun ZoomableImage(
     }
 
     val context = LocalContext.current
-    val imageModel = remember(mediaItem.remotePath, mediaItem.thumbnailPath, imageSource) {
-        resolveViewerImageModel(
-            context = context,
-            mediaItem = mediaItem,
-            imageSource = imageSource,
-        )
+    val localThumbnail = remember(mediaItem.remotePath, mediaItem.thumbnailPath) {
+        mediaItem.thumbnailPath?.let { path ->
+            val file = File(path)
+            if (file.exists()) file else null
+        }
     }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
+    // Viewer should render the full remote image directly (Google Photos-style).
+    // Local thumbnail is only a fallback when no authenticated remote source exists.
+    val imageRequest = remember(mediaItem.remotePath, mediaItem.thumbnailPath, imageSource) {
+        when {
+            imageSource != null -> buildRemoteImageRequest(
+                context = context,
+                url = imageSource.fullResUrl,
+                authHeader = imageSource.authHeader,
+            )
+            localThumbnail != null -> ImageRequest.Builder(context)
+                .data(localThumbnail)
+                .build()
+            else -> null
+        }
+    }
+    val interactionModifier = if (interactionsEnabled) {
+        Modifier
             .pointerInput(mediaItem.remotePath) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     val newScale = (scale.value * zoom).coerceIn(MIN_SCALE, MAX_SCALE)
@@ -318,25 +405,35 @@ private fun ZoomableImage(
                         }
                     },
                 )
-            },
+            }
+    } else {
+        Modifier
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .then(interactionModifier),
         contentAlignment = Alignment.Center,
     ) {
-        if (imageModel != null) {
+        val graphicsModifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer(
+                scaleX = scale.value,
+                scaleY = scale.value,
+                translationX = offsetX.value,
+                translationY = offsetY.value,
+            )
+
+        if (imageRequest != null) {
             AsyncImage(
-                model = imageModel,
+                model = imageRequest,
                 contentDescription = mediaItem.fileName,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer(
-                        scaleX = scale.value,
-                        scaleY = scale.value,
-                        translationX = offsetX.value,
-                        translationY = offsetY.value,
-                    ),
+                modifier = graphicsModifier,
             )
         } else {
-            // Placeholder when no image is cached
+            // No local or remote source available yet.
             Icon(
                 imageVector = Icons.Default.Photo,
                 contentDescription = mediaItem.fileName,
@@ -374,25 +471,6 @@ private fun PrefetchLayer(prefetchSources: List<ViewerImageSource>) {
     }
 }
 
-private fun resolveViewerImageModel(
-    context: Context,
-    mediaItem: MediaItem,
-    imageSource: ViewerImageSource?,
-): Any? {
-    val localThumbnail = mediaItem.thumbnailPath?.let { path ->
-        val file = File(path)
-        if (file.exists()) file else null
-    }
-    if (localThumbnail != null) return localThumbnail
-
-    if (imageSource == null) return null
-    return buildRemoteImageRequest(
-        context = context,
-        url = imageSource.fullResUrl,
-        authHeader = imageSource.authHeader,
-    )
-}
-
 private fun buildRemoteImageRequest(
     context: Context,
     url: String,
@@ -401,6 +479,7 @@ private fun buildRemoteImageRequest(
     return ImageRequest.Builder(context)
         .data(url)
         .httpHeaders(NetworkHeaders.Builder().set("Authorization", authHeader).build())
+        .crossfade(150)
         .build()
 }
 

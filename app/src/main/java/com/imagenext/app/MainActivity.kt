@@ -208,12 +208,21 @@ fun ImageNextApp(
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize()) {
+            val navHostModifier = if (isViewer) {
+                // Keep viewer in a stable full-screen container so launch/close
+                // transitions aren't perturbed by bottom bar inset animations.
+                Modifier.fillMaxSize()
+            } else {
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            }
             AppNavHost(
                 navController = navController,
                 startDestination = startDestination,
                 app = app,
                 onboardingViewModelFactory = onboardingViewModelFactory,
-                modifier = Modifier.padding(innerPadding),
+                modifier = navHostModifier,
             )
             if (isLocked) {
                 AppLockScreen(

@@ -1,5 +1,6 @@
 package com.imagenext.feature.photos
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -28,6 +29,7 @@ class PhotosViewModel(
     timelineRepository: TimelineRepository,
     private val syncOrchestrator: SyncOrchestrator,
 ) : ViewModel() {
+    private var lastForegroundSyncRequestElapsedMs = 0L
 
     /** Paged timeline items with in-stream date headers, cached across config changes. */
     val timelineItems: Flow<PagingData<TimelineItem>> =
@@ -61,6 +63,7 @@ class PhotosViewModel(
 
     init {
         observeSync()
+        onPhotosForegrounded()
         triggerThumbnailBackfillIfNeeded()
         enableAutoSync()
     }
@@ -71,6 +74,16 @@ class PhotosViewModel(
                 _syncState.value = syncState
             }
         }
+    }
+
+    fun onPhotosForegrounded() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastForegroundSyncRequestElapsedMs < FOREGROUND_SYNC_MIN_INTERVAL_MS) return
+        lastForegroundSyncRequestElapsedMs = now
+
+        // Perform a foreground freshness check when Photos is entered/resumed.
+        // KEEP policy avoids replacing an already running metadata sync.
+        syncOrchestrator.requestSyncNow()
     }
 
     private fun triggerThumbnailBackfillIfNeeded() {
@@ -104,6 +117,7 @@ class PhotosViewModel(
 
     private companion object {
         const val INITIAL_BACKFILL_DELAY_MS = 2500L
+        const val FOREGROUND_SYNC_MIN_INTERVAL_MS = 45_000L
     }
 }
 
