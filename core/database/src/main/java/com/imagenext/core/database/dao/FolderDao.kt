@@ -43,6 +43,14 @@ interface FolderDao {
     @Query("SELECT * FROM sync_checkpoints WHERE folderPath = :folderPath")
     suspend fun getCheckpoint(folderPath: String): SyncCheckpointEntity?
 
+    /** Returns the most recent checkpoint that contains a failure diagnostic. */
+    @Query(
+        "SELECT * FROM sync_checkpoints " +
+            "WHERE lastErrorMessage IS NOT NULL AND lastErrorMessage != '' " +
+            "ORDER BY lastSyncTimestamp DESC LIMIT 1"
+    )
+    suspend fun getLatestCheckpointWithError(): SyncCheckpointEntity?
+
     /** Inserts or updates a sync checkpoint. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCheckpoint(checkpoint: SyncCheckpointEntity)

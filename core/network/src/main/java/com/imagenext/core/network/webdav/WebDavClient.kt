@@ -18,6 +18,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.util.ArrayDeque
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
@@ -40,7 +41,24 @@ class WebDavClient(
     /** Result type for WebDAV operations. */
     sealed interface WebDavResult<out T> {
         data class Success<T>(val data: T) : WebDavResult<T>
-        data class Error(val message: String, val cause: Throwable? = null) : WebDavResult<Nothing>
+        data class Error(
+            val message: String,
+            val cause: Throwable? = null,
+            val category: ErrorCategory = ErrorCategory.UNKNOWN,
+            val httpStatusCode: Int? = null,
+        ) : WebDavResult<Nothing> {
+            val isTransient: Boolean
+                get() = category == ErrorCategory.TRANSIENT
+        }
+
+        enum class ErrorCategory {
+            TRANSIENT,
+            AUTH,
+            NOT_FOUND,
+            SECURITY,
+            CLIENT,
+            UNKNOWN,
+        }
     }
 
     /**
@@ -76,15 +94,15 @@ class WebDavClient(
             )
             WebDavResult.Success(folders)
         } catch (e: UnknownHostException) {
-            WebDavResult.Error("Server not found. Please check your connection.", e)
+            exceptionError("Server not found. Please check your connection.", e)
         } catch (e: SocketTimeoutException) {
-            WebDavResult.Error("Connection timed out while discovering folders.", e)
+            exceptionError("Connection timed out while discovering folders.", e)
         } catch (e: SSLException) {
-            WebDavResult.Error("Secure connection failed.", e)
+            exceptionError("Secure connection failed.", e)
         } catch (e: IOException) {
-            WebDavResult.Error("Failed to discover folders: ${e.message}", e)
+            exceptionError("Failed to discover folders: ${e.message}", e)
         } catch (e: Exception) {
-            WebDavResult.Error("Unexpected error during folder discovery: ${e.message}", e)
+            exceptionError("Unexpected error during folder discovery: ${e.message}", e)
         }
     }
 
@@ -106,21 +124,167 @@ class WebDavClient(
         return try {
             client.newCall(request).execute().use { response ->
                 if (response.code == 207) {
-                    val body = response.body?.string().orEmpty()
+                    val body = response.body.string()
                     val items = parseMediaItems(body, folderPath, serverUrl, loginName)
                     WebDavResult.Success(items)
                 } else {
-                    WebDavResult.Error("Failed to list files (HTTP ${response.code}).")
+                    httpError(
+                        message = "Failed to list files (HTTP ${response.code}).",
+                        statusCode = response.code,
+                    )
                 }
             }
         } catch (e: UnknownHostException) {
-            WebDavResult.Error("Server not found.", e)
+            exceptionError("Server not found.", e)
         } catch (e: SocketTimeoutException) {
-            WebDavResult.Error("Connection timed out.", e)
+            exceptionError("Connection timed out.", e)
         } catch (e: SSLException) {
-            WebDavResult.Error("Secure connection failed.", e)
+            exceptionError("Secure connection failed.", e)
         } catch (e: IOException) {
-            WebDavResult.Error("Failed to list media files: ${e.message}", e)
+            exceptionError("Failed to list media files: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Recursively lists media files under [folderPath].
+     *
+     * Traverses child folders breadth-first up to [maxDepth], issuing
+     * Depth:1 PROPFIND per folder and aggregating all image-like files.
+     */
+    fun listMediaFilesRecursively(
+        serverUrl: String,
+        loginName: String,
+        appPassword: String,
+        folderPath: String,
+        maxDepth: Int = MAX_MEDIA_SCAN_DEPTH,
+    ): WebDavResult<List<MediaItem>> {
+        return try {
+            val queue = ArrayDeque<Pair<String, Int>>()
+            val visitedFolders = mutableSetOf<String>()
+            val mediaItems = mutableListOf<MediaItem>()
+            val scanDeadlineMs = System.currentTimeMillis() + MAX_MEDIA_SCAN_DURATION_MS
+
+            queue.add(folderPath to 0)
+
+            scanLoop@ while (queue.isNotEmpty() && visitedFolders.size < MAX_MEDIA_FOLDER_SCAN_COUNT) {
+                if (System.currentTimeMillis() >= scanDeadlineMs) {
+                    break
+                }
+                val (currentFolder, depth) = queue.removeFirst()
+                val normalizedFolder = currentFolder.trimEnd('/').ifEmpty { "/" }
+                if (!visitedFolders.add(normalizedFolder)) continue
+
+                val webDavUrl = buildWebDavUrl(serverUrl, loginName, currentFolder)
+                val request = buildPropfindRequest(webDavUrl, loginName, appPassword, depth = "1")
+
+                try {
+                    client.newCall(request).execute().use { response ->
+                        if (response.code != 207) {
+                            // Root folder failure is considered fatal for this scan.
+                            if (depth == 0 || response.code == 401) {
+                                return httpError(
+                                    message = "Failed to list files (HTTP ${response.code}) in $currentFolder.",
+                                    statusCode = response.code,
+                                )
+                            }
+                            // Child folder issues should not stall the entire sync.
+                            continue@scanLoop
+                        }
+
+                        val body = response.body.string()
+                        if (body.length > MAX_RESPONSE_SIZE) {
+                            continue@scanLoop
+                        }
+
+                        mediaItems += parseMediaItems(
+                            xml = body,
+                            folderPath = currentFolder,
+                            serverUrl = serverUrl,
+                            loginName = loginName,
+                        )
+
+                        if (depth < maxDepth) {
+                            val childFolders = parseFolders(
+                                xml = body,
+                                currentPath = currentFolder,
+                                loginName = loginName,
+                            )
+                            childFolders.forEach { child ->
+                                if (!shouldTraverseFolder(child.remotePath)) return@forEach
+                                queue.add(child.remotePath to (depth + 1))
+                            }
+                        }
+                    }
+                } catch (e: UnknownHostException) {
+                    if (depth == 0) return exceptionError("Server not found.", e)
+                    continue@scanLoop
+                } catch (e: SocketTimeoutException) {
+                    if (depth == 0) return exceptionError("Connection timed out.", e)
+                    continue@scanLoop
+                } catch (e: SSLException) {
+                    if (depth == 0) return exceptionError("Secure connection failed.", e)
+                    continue@scanLoop
+                } catch (e: IOException) {
+                    if (depth == 0) return exceptionError("Failed to list media files: ${e.message}", e)
+                    continue@scanLoop
+                }
+            }
+
+            WebDavResult.Success(mediaItems.distinctBy { it.remotePath })
+        } catch (e: UnknownHostException) {
+            exceptionError("Server not found.", e)
+        } catch (e: SocketTimeoutException) {
+            exceptionError("Connection timed out.", e)
+        } catch (e: SSLException) {
+            exceptionError("Secure connection failed.", e)
+        } catch (e: IOException) {
+            exceptionError("Failed to list media files: ${e.message}", e)
+        }
+    }
+
+    private fun shouldTraverseFolder(remotePath: String): Boolean {
+        val folderName = remotePath
+            .trimEnd('/')
+            .substringAfterLast('/')
+            .lowercase(Locale.US)
+        if (folderName.isBlank()) return false
+        if (folderName.startsWith(".")) return false
+        return folderName !in SKIPPED_MEDIA_SCAN_FOLDERS
+    }
+
+    private fun httpError(message: String, statusCode: Int): WebDavResult.Error {
+        return WebDavResult.Error(
+            message = message,
+            category = categorizeHttpStatus(statusCode),
+            httpStatusCode = statusCode,
+        )
+    }
+
+    private fun exceptionError(message: String, cause: Exception): WebDavResult.Error {
+        return WebDavResult.Error(
+            message = message,
+            cause = cause,
+            category = categorizeException(cause),
+        )
+    }
+
+    private fun categorizeHttpStatus(statusCode: Int): WebDavResult.ErrorCategory {
+        return when (statusCode) {
+            401, 403 -> WebDavResult.ErrorCategory.AUTH
+            404 -> WebDavResult.ErrorCategory.NOT_FOUND
+            in 500..599 -> WebDavResult.ErrorCategory.TRANSIENT
+            else -> WebDavResult.ErrorCategory.CLIENT
+        }
+    }
+
+    private fun categorizeException(exception: Exception): WebDavResult.ErrorCategory {
+        return when (exception) {
+            is UnknownHostException,
+            is SocketTimeoutException,
+            is IOException,
+            -> WebDavResult.ErrorCategory.TRANSIENT
+            is SSLException -> WebDavResult.ErrorCategory.SECURITY
+            else -> WebDavResult.ErrorCategory.UNKNOWN
         }
     }
 
@@ -144,7 +308,7 @@ class WebDavClient(
         client.newCall(request).execute().use { response ->
             if (response.code != 207) return
 
-            val body = response.body?.string().orEmpty()
+            val body = response.body.string()
             if (body.length > MAX_RESPONSE_SIZE) return
 
             val childFolders = parseFolders(body, currentPath, loginName)
@@ -245,7 +409,7 @@ class WebDavClient(
                 XmlPullParser.END_TAG -> {
                     if (parser.name == "response" || parser.name == "d:response") {
                         if (inResponse && isCollection && href != null) {
-                            val remotePath = extractRemotePath(href!!, loginName)
+                            val remotePath = extractRemotePath(href, loginName)
                             val normalizedCurrent = currentPath.trimEnd('/')
                             val normalizedRemote = remotePath.trimEnd('/')
 
@@ -325,24 +489,26 @@ class WebDavClient(
                 }
                 XmlPullParser.END_TAG -> {
                     if (parser.name == "response" || parser.name == "d:response") {
-                        if (inResponse && !isCollection && href != null && isImageMimeType(contentType)) {
-                            val remotePath = extractRemotePath(href!!, loginName)
-                            val fileName = remotePath.substringAfterLast('/')
-                            val timestamp = parseHttpDate(lastModified)
-                            val captureTimestamp = parseCaptureTimestampFromFileName(fileName)
+                        if (inResponse && !isCollection && href != null) {
+                            val remotePath = extractRemotePath(href, loginName)
+                            if (isLikelyImage(contentType, remotePath)) {
+                                val fileName = remotePath.substringAfterLast('/')
+                                val timestamp = parseHttpDate(lastModified)
+                                val captureTimestamp = parseCaptureTimestampFromFileName(fileName)
 
-                            items.add(
-                                MediaItem(
-                                    remotePath = remotePath,
-                                    fileName = fileName,
-                                    mimeType = contentType.orEmpty(),
-                                    size = contentLength,
-                                    lastModified = timestamp,
-                                    captureTimestamp = captureTimestamp,
-                                    etag = etag.orEmpty().trim('"'),
-                                    folderPath = folderPath,
+                                items.add(
+                                    MediaItem(
+                                        remotePath = remotePath,
+                                        fileName = fileName,
+                                        mimeType = contentType.orEmpty(),
+                                        size = contentLength,
+                                        lastModified = timestamp,
+                                        captureTimestamp = captureTimestamp,
+                                        etag = etag.orEmpty().trim('"'),
+                                        folderPath = folderPath,
+                                    )
                                 )
-                            )
+                            }
                         }
                         inResponse = false
                     }
@@ -372,6 +538,13 @@ class WebDavClient(
     private fun isImageMimeType(mimeType: String?): Boolean {
         if (mimeType == null) return false
         return mimeType.startsWith("image/")
+    }
+
+    private fun isLikelyImage(mimeType: String?, remotePath: String): Boolean {
+        if (isImageMimeType(mimeType)) return true
+
+        val extension = remotePath.substringAfterLast('.', "").lowercase(Locale.US)
+        return extension in IMAGE_FILE_EXTENSIONS
     }
 
     /**
@@ -431,9 +604,43 @@ class WebDavClient(
 
         /** Maximum XML response size to parse (2 MB). */
         const val MAX_RESPONSE_SIZE = 2 * 1024 * 1024
+        const val MAX_MEDIA_SCAN_DEPTH = 2
+        const val MAX_MEDIA_FOLDER_SCAN_COUNT = 120
+        const val MAX_MEDIA_SCAN_DURATION_MS = 45_000L
 
         private val DATE_TIME_TOKEN_REGEX = Regex("(\\d{8}_\\d{6}|\\d{4}-\\d{2}-\\d{2}[ _-]\\d{2}[-:]\\d{2}[-:]\\d{2})")
         private val DATE_TOKEN_REGEX = Regex("(\\d{8}|\\d{4}-\\d{2}-\\d{2})")
+        private val IMAGE_FILE_EXTENSIONS = setOf(
+            "jpg",
+            "jpeg",
+            "png",
+            "gif",
+            "bmp",
+            "webp",
+            "heic",
+            "heif",
+            "avif",
+            "tif",
+            "tiff",
+            "dng",
+            "raw",
+            "arw",
+            "cr2",
+            "cr3",
+            "nef",
+            "orf",
+            "rw2",
+        )
+        private val SKIPPED_MEDIA_SCAN_FOLDERS = setOf(
+            "thumbnails",
+            "@eadir",
+            "cache",
+            "tmp",
+            "temp",
+            "trash",
+            "files_trashbin",
+            "files_versions",
+        )
 
         private val dateTimeFormatters = listOf(
             DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.US),

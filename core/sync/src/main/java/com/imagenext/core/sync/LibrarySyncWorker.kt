@@ -68,6 +68,8 @@ class LibrarySyncWorker(
 
         val totalSynced = AtomicInteger(0)
         val failedFolders = AtomicInteger(0)
+        val transientFailedFolders = AtomicInteger(0)
+        val terminalFailedFolders = AtomicInteger(0)
         val completedFolders = AtomicInteger(0)
         val thumbnailOverlapKickoffRequested = AtomicBoolean(false)
         val scanSemaphore = Semaphore(FOLDER_SCAN_CONCURRENCY)
@@ -84,12 +86,25 @@ class LibrarySyncWorker(
 
                         // Fetch media files from WebDAV
                         val listStartMs = SystemClock.elapsedRealtime()
-                        val result = webDavClient.listMediaFiles(
+                        val recursiveResult = webDavClient.listMediaFilesRecursively(
                             serverUrl = session.serverUrl,
                             loginName = session.loginName,
                             appPassword = session.appPassword,
                             folderPath = folder.remotePath,
                         )
+                        val usedFallback = recursiveResult is WebDavClient.WebDavResult.Error
+                        val result = when (recursiveResult) {
+                            is WebDavClient.WebDavResult.Success -> recursiveResult
+                            is WebDavClient.WebDavResult.Error -> {
+                                // Fall back to shallow listing if recursive traversal fails.
+                                webDavClient.listMediaFiles(
+                                    serverUrl = session.serverUrl,
+                                    loginName = session.loginName,
+                                    appPassword = session.appPassword,
+                                    folderPath = folder.remotePath,
+                                )
+                            }
+                        }
                         val listDurationMs = elapsedSince(listStartMs)
 
                         when (result) {
@@ -140,11 +155,12 @@ class LibrarySyncWorker(
                                 totalSynced.addAndGet(entities.size)
                                 val upsertDurationMs = elapsedSince(upsertStartMs)
                                 logPerf(
-                                    "library_sync_folder_success " +
-                                        "index=${index + 1}/${selectedFolders.size} " +
-                                        "items=${entities.size} " +
-                                        "listMs=$listDurationMs " +
-                                        "upsertMs=$upsertDurationMs"
+                                "library_sync_folder_success " +
+                                    "index=${index + 1}/${selectedFolders.size} " +
+                                    "items=${entities.size} " +
+                                    "fallback=$usedFallback " +
+                                    "listMs=$listDurationMs " +
+                                    "upsertMs=$upsertDurationMs"
                                 )
 
                                 val needsThumbnailBackfill = entities.any { entity ->
@@ -165,15 +181,25 @@ class LibrarySyncWorker(
                                         lastSyncTimestamp = System.currentTimeMillis(),
                                         lastEtag = "",
                                         status = SyncState.Completed.name,
+                                        lastErrorCode = null,
+                                        lastErrorMessage = null,
                                     )
                                 )
                             }
                             is WebDavClient.WebDavResult.Error -> {
                                 failedFolders.incrementAndGet()
+                                if (result.isTransient) {
+                                    transientFailedFolders.incrementAndGet()
+                                } else {
+                                    terminalFailedFolders.incrementAndGet()
+                                }
+                                val failureCode = folderFailureCode(result)
                                 logPerf(
                                     "library_sync_folder_error " +
                                         "index=${index + 1}/${selectedFolders.size} " +
-                                        "listMs=$listDurationMs"
+                                        "listMs=$listDurationMs " +
+                                        "transient=${result.isTransient} " +
+                                        "errorCode=$failureCode"
                                 )
                                 // Update checkpoint as failed
                                 folderDao.upsertCheckpoint(
@@ -182,6 +208,8 @@ class LibrarySyncWorker(
                                         lastSyncTimestamp = System.currentTimeMillis(),
                                         lastEtag = checkpoint?.lastEtag.orEmpty(),
                                         status = SyncState.Failed.name,
+                                        lastErrorCode = failureCode,
+                                        lastErrorMessage = result.message,
                                     )
                                 )
                             }
@@ -202,29 +230,63 @@ class LibrarySyncWorker(
 
         val totalSyncedCount = totalSynced.get()
         val failedFoldersCount = failedFolders.get()
+        val transientFailedFoldersCount = transientFailedFolders.get()
+        val terminalFailedFoldersCount = terminalFailedFolders.get()
 
         if (!isStopped && totalSyncedCount > 0 && !thumbnailOverlapKickoffRequested.get()) {
             ThumbnailWorker.enqueueBackfill(applicationContext)
         }
 
         val totalDurationMs = elapsedSince(workerStartMs)
-        val result = if (failedFoldersCount > 0 && failedFoldersCount < selectedFolders.size) {
-            // Partial success — some folders failed
-            Result.success(
-                workDataOf(
-                    KEY_SYNCED_COUNT to totalSyncedCount,
-                    KEY_STATUS to SyncState.Partial.name,
+        val allFoldersFailed = failedFoldersCount == selectedFolders.size
+        val allFailuresTransient = allFoldersFailed &&
+            transientFailedFoldersCount == failedFoldersCount &&
+            terminalFailedFoldersCount == 0
+        val shouldRetryAllFolderTransientFailure = allFailuresTransient &&
+            runAttemptCount < MAX_TRANSIENT_ALL_FOLDER_RETRY_ATTEMPTS
+
+        val result = when {
+            failedFoldersCount > 0 && failedFoldersCount < selectedFolders.size -> {
+                // Partial success — some folders failed
+                Result.success(
+                    workDataOf(
+                        KEY_SYNCED_COUNT to totalSyncedCount,
+                        KEY_STATUS to SyncState.Partial.name,
+                    )
                 )
-            )
-        } else if (failedFoldersCount == selectedFolders.size) {
-            Result.retry()
-        } else {
-            Result.success(
-                workDataOf(
-                    KEY_SYNCED_COUNT to totalSyncedCount,
-                    KEY_STATUS to SyncState.Completed.name,
+            }
+            allFoldersFailed && shouldRetryAllFolderTransientFailure -> {
+                Result.retry()
+            }
+            allFoldersFailed -> {
+                val errorCategory = when {
+                    allFailuresTransient -> ERROR_CATEGORY_TRANSIENT
+                    terminalFailedFoldersCount == failedFoldersCount -> ERROR_CATEGORY_TERMINAL
+                    else -> ERROR_CATEGORY_MIXED
+                }
+                val errorCode = when (errorCategory) {
+                    ERROR_CATEGORY_TRANSIENT -> ERROR_ALL_FOLDERS_TRANSIENT_EXHAUSTED
+                    ERROR_CATEGORY_TERMINAL -> ERROR_ALL_FOLDERS_TERMINAL
+                    else -> ERROR_ALL_FOLDERS_MIXED
+                }
+
+                Result.failure(
+                    workDataOf(
+                        KEY_SYNCED_COUNT to totalSyncedCount,
+                        KEY_STATUS to SyncState.Failed.name,
+                        KEY_ERROR to errorCode,
+                        KEY_ERROR_CATEGORY to errorCategory,
+                    )
                 )
-            )
+            }
+            else -> {
+                Result.success(
+                    workDataOf(
+                        KEY_SYNCED_COUNT to totalSyncedCount,
+                        KEY_STATUS to SyncState.Completed.name,
+                    )
+                )
+            }
         }
 
         logPerf(
@@ -232,6 +294,9 @@ class LibrarySyncWorker(
                 "status=${result.javaClass.simpleName} " +
                 "synced=$totalSyncedCount " +
                 "failedFolders=$failedFoldersCount " +
+                "transientFailedFolders=$transientFailedFoldersCount " +
+                "terminalFailedFolders=$terminalFailedFoldersCount " +
+                "runAttemptCount=$runAttemptCount " +
                 "durationMs=$totalDurationMs"
         )
         return result
@@ -258,11 +323,26 @@ class LibrarySyncWorker(
         Log.d(PERF_TAG, message)
     }
 
+    private fun folderFailureCode(error: WebDavClient.WebDavResult.Error): String {
+        val category = when (error.category) {
+            WebDavClient.WebDavResult.ErrorCategory.TRANSIENT -> "transient"
+            WebDavClient.WebDavResult.ErrorCategory.AUTH -> "auth"
+            WebDavClient.WebDavResult.ErrorCategory.NOT_FOUND -> "not_found"
+            WebDavClient.WebDavResult.ErrorCategory.SECURITY -> "security"
+            WebDavClient.WebDavResult.ErrorCategory.CLIENT -> "client"
+            WebDavClient.WebDavResult.ErrorCategory.UNKNOWN -> "unknown"
+        }
+        return error.httpStatusCode?.let { statusCode ->
+            "${category}_http_$statusCode"
+        } ?: category
+    }
+
     companion object {
         const val WORK_NAME = "library_sync"
         const val KEY_SYNCED_COUNT = "synced_count"
         const val KEY_STATUS = "status"
         const val KEY_ERROR = "error"
+        const val KEY_ERROR_CATEGORY = "error_category"
         const val KEY_PROGRESS_CURRENT = "progress_current"
         const val KEY_PROGRESS_TOTAL = "progress_total"
         const val KEY_CURRENT_FOLDER = "current_folder"
@@ -270,5 +350,14 @@ class LibrarySyncWorker(
         private const val PERF_TAG = "ImageNextPerf"
         private const val REMOTE_PATH_LOOKUP_CHUNK_SIZE = 400
         private const val FOLDER_SCAN_CONCURRENCY = 2
+        private const val MAX_TRANSIENT_ALL_FOLDER_RETRY_ATTEMPTS = 3
+
+        private const val ERROR_CATEGORY_TRANSIENT = "transient"
+        private const val ERROR_CATEGORY_TERMINAL = "terminal"
+        private const val ERROR_CATEGORY_MIXED = "mixed"
+
+        private const val ERROR_ALL_FOLDERS_TRANSIENT_EXHAUSTED = "all_folders_transient_failed_exhausted"
+        private const val ERROR_ALL_FOLDERS_TERMINAL = "all_folders_terminal_failed"
+        private const val ERROR_ALL_FOLDERS_MIXED = "all_folders_mixed_failed"
     }
 }

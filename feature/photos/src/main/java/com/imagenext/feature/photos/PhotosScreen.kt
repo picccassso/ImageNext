@@ -34,6 +34,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -83,6 +86,7 @@ private const val GRID_PREVIEW_SIZE = 256
 private const val PERF_TAG = "ImageNextPerf"
 private const val MAX_FLING_VELOCITY_PX_PER_SECOND = 8500f
 
+@OptIn(androidx.compose.material.ExperimentalMaterialApi::class)
 @Composable
 fun PhotosScreen(
     viewModel: PhotosViewModel,
@@ -126,6 +130,16 @@ fun PhotosScreen(
         pagingItems.loadState.refresh is LoadState.Error &&
             pagingItems.itemCount == 0 &&
             !hasDisplayedPhotos
+    val isRefreshing =
+        syncState == SyncState.Running ||
+            (pagingItems.loadState.refresh is LoadState.Loading && pagingItems.itemCount > 0)
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = isRefreshing,
+        onRefresh = {
+            viewModel.refreshPhotos()
+            pagingItems.refresh()
+        },
+    )
     var loggedInitialLoadDone by remember { mutableStateOf(false) }
     var loggedFirstItemsVisible by remember { mutableStateOf(false) }
 
@@ -146,7 +160,12 @@ fun PhotosScreen(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .pullRefresh(pullRefreshState),
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
             SyncStatusBar(syncState = syncState, onRetry = { viewModel.retrySync() })
 
@@ -176,6 +195,16 @@ fun PhotosScreen(
                 }
             }
         }
+
+        PullRefreshIndicator(
+            refreshing = isRefreshing,
+            state = pullRefreshState,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 8.dp),
+            backgroundColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.primary,
+        )
 
         // Glossy top fade
         Canvas(modifier = Modifier.fillMaxWidth().height(24.dp)) {

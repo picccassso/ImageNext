@@ -25,6 +25,7 @@ class SettingsViewModelTest {
         assertEquals(ConnectionStatus.NOT_CONNECTED, state.connectionStatus)
         assertEquals(0, state.selectedFolderCount)
         assertEquals(SyncState.Idle, state.syncState)
+        assertEquals(null, state.syncIssue)
         assertTrue(state.trustedCertificates.isEmpty())
         assertFalse(state.isAppLockEnabled)
     }

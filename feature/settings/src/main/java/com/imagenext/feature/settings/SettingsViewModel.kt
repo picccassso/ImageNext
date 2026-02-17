@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Settings state and action orchestration.
@@ -35,6 +36,8 @@ class SettingsViewModel(
     private val appLockManager: AppLockManager,
     private val database: AppDatabase,
 ) : ViewModel() {
+
+    private val folderDao by lazy { database.folderDao() }
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -84,8 +87,43 @@ class SettingsViewModel(
     private fun observeSyncState() {
         viewModelScope.launch {
             syncOrchestrator.observeSyncState().collect { syncState ->
-                _uiState.value = _uiState.value.copy(syncState = syncState)
+                val syncIssue = when (syncState) {
+                    SyncState.Failed,
+                    SyncState.Partial,
+                    -> resolveLatestSyncIssue()
+                    else -> null
+                }
+                _uiState.value = _uiState.value.copy(
+                    syncState = syncState,
+                    syncIssue = syncIssue,
+                )
             }
+        }
+    }
+
+    private suspend fun resolveLatestSyncIssue(): String? {
+        val checkpoint = withContext(Dispatchers.IO) {
+            folderDao.getLatestCheckpointWithError()
+        } ?: return null
+
+        val errorCode = checkpoint.lastErrorCode.orEmpty()
+        val rawMessage = checkpoint.lastErrorMessage?.trim()
+        val httpCode = HTTP_CODE_SUFFIX_REGEX.find(errorCode)?.groupValues?.get(1)
+
+        val baseMessage = when {
+            errorCode.startsWith(ERROR_PREFIX_AUTH) -> "Authentication failed for selected folders"
+            errorCode.startsWith(ERROR_PREFIX_NOT_FOUND) -> "A selected folder was not found on server"
+            errorCode.startsWith(ERROR_PREFIX_SECURITY) -> "Secure connection validation failed"
+            errorCode.startsWith(ERROR_PREFIX_TRANSIENT) -> "Temporary network or server error"
+            errorCode.startsWith(ERROR_PREFIX_CLIENT) -> "Server rejected the folder request"
+            !rawMessage.isNullOrBlank() -> rawMessage
+            else -> "Sync failed for selected folders"
+        }
+
+        return if (httpCode != null && !baseMessage.contains("HTTP")) {
+            "$baseMessage (HTTP $httpCode)"
+        } else {
+            baseMessage
         }
     }
 
@@ -138,7 +176,7 @@ class SettingsViewModel(
             val method = appLockManager.getLockMethod()
             val canEnable = when (method) {
                 LockMethod.PIN -> appLockManager.hasPin()
-                LockMethod.BIOMETRIC -> appLockManager.isBiometricAvailable()
+                LockMethod.BIOMETRIC -> appLockManager.isBiometricAvailable() && appLockManager.hasPin()
             }
             if (!canEnable) {
                 _uiState.value = _uiState.value.copy(
@@ -159,6 +197,13 @@ class SettingsViewModel(
 
     /** Updates the selected app lock method. */
     fun setLockMethod(method: LockMethod) {
+        if (method == LockMethod.BIOMETRIC && !appLockManager.hasPin()) {
+            _uiState.value = _uiState.value.copy(
+                lockMethod = LockMethod.PIN,
+                hasPin = false,
+            )
+            return
+        }
         appLockManager.setLockMethod(method)
         _uiState.value = _uiState.value.copy(lockMethod = method)
     }
@@ -173,6 +218,9 @@ class SettingsViewModel(
             lockMethod = LockMethod.PIN,
         )
     }
+
+    /** Verifies whether the provided PIN matches the stored app lock PIN. */
+    fun verifyPin(pin: String): Boolean = appLockManager.verifyPin(pin)
 
     /**
      * Performs secure logout sequence.
@@ -225,6 +273,7 @@ data class SettingsUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.NOT_CONNECTED,
     val selectedFolderCount: Int = 0,
     val syncState: SyncState = SyncState.Idle,
+    val syncIssue: String? = null,
     val trustedCertificates: List<CertificateTrustStore.TrustedCertificate> = emptyList(),
     val isAppLockEnabled: Boolean = false,
     val lockMethod: LockMethod = LockMethod.PIN,
@@ -238,6 +287,12 @@ enum class ConnectionStatus {
 }
 
 private const val CONNECTION_STATUS_REFRESH_MS = 10_000L
+private val HTTP_CODE_SUFFIX_REGEX = Regex("_http_(\\d+)$")
+private const val ERROR_PREFIX_TRANSIENT = "transient"
+private const val ERROR_PREFIX_AUTH = "auth"
+private const val ERROR_PREFIX_NOT_FOUND = "not_found"
+private const val ERROR_PREFIX_SECURITY = "security"
+private const val ERROR_PREFIX_CLIENT = "client"
 
 /**
  * Factory for [SettingsViewModel].

@@ -16,7 +16,7 @@ import com.imagenext.core.database.entity.SyncCheckpointEntity
  * Room database root for ImageNext.
  *
  * Contains entities for media metadata, folder selections, and sync checkpoints.
- * Version 3 — adds timeline sort key and query indexes for performance.
+ * Version 4 — adds sync checkpoint error metadata for failure diagnostics.
  *
  * Migration policy: future schema changes should use Room's migration API
  * to preserve user data across app updates.
@@ -27,7 +27,7 @@ import com.imagenext.core.database.entity.SyncCheckpointEntity
         SelectedFolderEntity::class,
         SyncCheckpointEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -54,6 +54,7 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                     .addMigrations(MIGRATION_1_2)
                     .addMigrations(MIGRATION_2_3)
+                    .addMigrations(MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }
@@ -99,6 +100,19 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL(
                     "CREATE INDEX IF NOT EXISTS index_media_items_thumbnailStatus_thumbnailRetryCount_timelineSortKey " +
                         "ON media_items(thumbnailStatus, thumbnailRetryCount, timelineSortKey)"
+                )
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE sync_checkpoints " +
+                        "ADD COLUMN lastErrorCode TEXT"
+                )
+                database.execSQL(
+                    "ALTER TABLE sync_checkpoints " +
+                        "ADD COLUMN lastErrorMessage TEXT"
                 )
             }
         }

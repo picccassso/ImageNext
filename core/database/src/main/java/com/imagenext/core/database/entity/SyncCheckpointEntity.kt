@@ -23,4 +23,10 @@ data class SyncCheckpointEntity(
 
     /** Current sync status as a string (maps to SyncState enum). */
     val status: String,
+
+    /** Last categorized failure code for this folder, if any. */
+    val lastErrorCode: String? = null,
+
+    /** Last failure message for this folder, if any. */
+    val lastErrorMessage: String? = null,
 )

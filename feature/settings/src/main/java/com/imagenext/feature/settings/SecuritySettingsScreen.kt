@@ -48,6 +48,7 @@ fun SecuritySettingsSection(
     modifier: Modifier = Modifier,
 ) {
     var showPinDialog by remember { mutableStateOf(false) }
+    var pendingBiometricEnable by remember { mutableStateOf(false) }
 
     Column(modifier = modifier) {
         // App Lock
@@ -86,7 +87,14 @@ fun SecuritySettingsSection(
             }
             Switch(
                 checked = isAppLockEnabled,
-                onCheckedChange = onAppLockToggle,
+                onCheckedChange = { enabled ->
+                    if (enabled && lockMethod == LockMethod.PIN && !hasPin) {
+                        // Bootstrap PIN-based lock setup instead of silently rejecting enable.
+                        showPinDialog = true
+                    } else {
+                        onAppLockToggle(enabled)
+                    }
+                },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = MaterialTheme.colorScheme.primary,
                     checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
@@ -112,7 +120,14 @@ fun SecuritySettingsSection(
                 if (isBiometricAvailable) {
                     FilterChip(
                         selected = lockMethod == LockMethod.BIOMETRIC,
-                        onClick = { onLockMethodSelected(LockMethod.BIOMETRIC) },
+                        onClick = {
+                            if (!hasPin) {
+                                pendingBiometricEnable = true
+                                showPinDialog = true
+                            } else {
+                                onLockMethodSelected(LockMethod.BIOMETRIC)
+                            }
+                        },
                         label = { Text("Biometric") },
                         leadingIcon = {
                             Icon(Icons.Default.Fingerprint, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -121,14 +136,16 @@ fun SecuritySettingsSection(
                 }
             }
 
-            Text(
-                text = if (hasPin) "Change PIN" else "Set PIN",
-                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .padding(start = 52.dp, top = 10.dp)
-                    .clickable { showPinDialog = true },
-            )
+            if (lockMethod == LockMethod.PIN || !hasPin) {
+                Text(
+                    text = if (hasPin) "Change PIN" else "Set PIN",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .padding(start = 52.dp, top = 10.dp)
+                        .clickable { showPinDialog = true },
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -181,9 +198,16 @@ fun SecuritySettingsSection(
 
     if (showPinDialog) {
         PinDialog(
-            onDismiss = { showPinDialog = false },
+            onDismiss = {
+                pendingBiometricEnable = false
+                showPinDialog = false
+            },
             onSave = { pin ->
                 onSavePin(pin)
+                if (pendingBiometricEnable) {
+                    onLockMethodSelected(LockMethod.BIOMETRIC)
+                    pendingBiometricEnable = false
+                }
                 showPinDialog = false
             },
         )

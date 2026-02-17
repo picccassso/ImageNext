@@ -19,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.ActivityCompat
@@ -39,6 +41,15 @@ fun SettingsScreen(
     val context = LocalContext.current
     val activity = context as? Activity
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showDisablePinDialog by remember { mutableStateOf(false) }
+    var disablePin by remember { mutableStateOf("") }
+    var disablePinError by remember { mutableStateOf<String?>(null) }
+
+    fun openDisablePinDialog() {
+        disablePin = ""
+        disablePinError = null
+        showDisablePinDialog = true
+    }
 
     LaunchedEffect(logoutEvent) {
         if (logoutEvent) {
@@ -116,6 +127,33 @@ fun SettingsScreen(
                             label = "Status",
                             value = syncStateLabel(uiState.syncState),
                         )
+                        if (!uiState.syncIssue.isNullOrBlank() &&
+                            (uiState.syncState == SyncState.Failed || uiState.syncState == SyncState.Partial)
+                        ) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                val issueTint = if (uiState.syncState == SyncState.Failed) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = issueTint,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Last issue: ${uiState.syncIssue}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = issueTint,
+                                )
+                            }
+                        }
                         if (uiState.syncState == SyncState.Failed || uiState.syncState == SyncState.Partial) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Button(
@@ -151,9 +189,68 @@ fun SettingsScreen(
                             onRevokeCertificate = { viewModel.revokeCertificate(it) },
                             onAppLockToggle = { enabled ->
                                 if (!enabled) {
-                                    viewModel.setAppLockEnabled(false)
+                                    val canUseBiometricForDisable =
+                                        uiState.lockMethod == LockMethod.BIOMETRIC &&
+                                            uiState.isBiometricAvailable &&
+                                            activity != null
+                                    if (canUseBiometricForDisable) {
+                                        val prompt = BiometricPrompt.Builder(activity)
+                                            .setTitle("Disable App Lock")
+                                            .setSubtitle("Confirm your identity to disable app lock")
+                                            .setNegativeButton(
+                                                if (uiState.hasPin) "Use PIN" else "Cancel",
+                                                ContextCompat.getMainExecutor(activity),
+                                            ) { _, _ ->
+                                                if (uiState.hasPin) {
+                                                    openDisablePinDialog()
+                                                }
+                                            }
+                                            .build()
+                                        val hasBiometricPermission =
+                                            ActivityCompat.checkSelfPermission(
+                                                activity,
+                                                android.Manifest.permission.USE_BIOMETRIC,
+                                            ) == PackageManager.PERMISSION_GRANTED ||
+                                                ActivityCompat.checkSelfPermission(
+                                                    activity,
+                                                    android.Manifest.permission.USE_FINGERPRINT,
+                                                ) == PackageManager.PERMISSION_GRANTED
+                                        if (hasBiometricPermission) {
+                                            try {
+                                                prompt.authenticate(
+                                                    CancellationSignal(),
+                                                    ContextCompat.getMainExecutor(activity),
+                                                    object : BiometricPrompt.AuthenticationCallback() {
+                                                        override fun onAuthenticationSucceeded(
+                                                            result: BiometricPrompt.AuthenticationResult?,
+                                                        ) {
+                                                            viewModel.setAppLockEnabled(false)
+                                                        }
+
+                                                        override fun onAuthenticationError(
+                                                            errorCode: Int,
+                                                            errString: CharSequence?,
+                                                        ) {
+                                                            if (uiState.hasPin) {
+                                                                openDisablePinDialog()
+                                                            }
+                                                        }
+                                                    },
+                                                )
+                                            } catch (_: SecurityException) {
+                                                if (uiState.hasPin) {
+                                                    openDisablePinDialog()
+                                                }
+                                            }
+                                        } else if (uiState.hasPin) {
+                                            openDisablePinDialog()
+                                        }
+                                    } else {
+                                        openDisablePinDialog()
+                                    }
                                 } else if (
                                     uiState.lockMethod == LockMethod.BIOMETRIC &&
+                                    uiState.hasPin &&
                                     uiState.isBiometricAvailable &&
                                     activity != null
                                 ) {
@@ -197,7 +294,55 @@ fun SettingsScreen(
                                     viewModel.setAppLockEnabled(true)
                                 }
                             },
-                            onLockMethodSelected = { viewModel.setLockMethod(it) },
+                            onLockMethodSelected = { method ->
+                                if (method == LockMethod.BIOMETRIC) {
+                                    val canEnableBiometricMethod =
+                                        uiState.hasPin &&
+                                            uiState.isBiometricAvailable &&
+                                            activity != null
+
+                                    if (canEnableBiometricMethod) {
+                                        val hasBiometricPermission =
+                                            ActivityCompat.checkSelfPermission(
+                                                activity,
+                                                android.Manifest.permission.USE_BIOMETRIC,
+                                            ) == PackageManager.PERMISSION_GRANTED ||
+                                                ActivityCompat.checkSelfPermission(
+                                                    activity,
+                                                    android.Manifest.permission.USE_FINGERPRINT,
+                                                ) == PackageManager.PERMISSION_GRANTED
+
+                                        if (hasBiometricPermission) {
+                                            val prompt = BiometricPrompt.Builder(activity)
+                                                .setTitle("Enable Biometric Unlock")
+                                                .setSubtitle("Confirm your identity to use biometrics")
+                                                .setNegativeButton(
+                                                    "Cancel",
+                                                    ContextCompat.getMainExecutor(activity),
+                                                ) { _, _ -> }
+                                                .build()
+
+                                            try {
+                                                prompt.authenticate(
+                                                    CancellationSignal(),
+                                                    ContextCompat.getMainExecutor(activity),
+                                                    object : BiometricPrompt.AuthenticationCallback() {
+                                                        override fun onAuthenticationSucceeded(
+                                                            result: BiometricPrompt.AuthenticationResult?,
+                                                        ) {
+                                                            viewModel.setLockMethod(LockMethod.BIOMETRIC)
+                                                        }
+                                                    },
+                                                )
+                                            } catch (_: SecurityException) {
+                                                // Keep previous method unchanged when biometric auth cannot start.
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    viewModel.setLockMethod(LockMethod.PIN)
+                                }
+                            },
                             onSavePin = { viewModel.savePin(it) },
                         )
                     }
@@ -243,6 +388,61 @@ fun SettingsScreen(
             },
             containerColor = ImageNextSurface,
             shape = RoundedCornerShape(16.dp)
+        )
+    }
+
+    if (showDisablePinDialog) {
+        AlertDialog(
+            onDismissRequest = { showDisablePinDialog = false },
+            title = { Text("Disable App Lock") },
+            text = {
+                Column {
+                    Text("Enter your PIN to disable app lock.")
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = disablePin,
+                        onValueChange = {
+                            disablePin = it.filter(Char::isDigit).take(8)
+                            disablePinError = null
+                        },
+                        singleLine = true,
+                        label = { Text("PIN") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    )
+                    if (!disablePinError.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = disablePinError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (viewModel.verifyPin(disablePin)) {
+                            viewModel.setAppLockEnabled(false)
+                            showDisablePinDialog = false
+                            disablePin = ""
+                            disablePinError = null
+                        } else {
+                            disablePinError = "Incorrect PIN."
+                        }
+                    },
+                    enabled = disablePin.length >= 4,
+                ) {
+                    Text("Disable")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisablePinDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+            containerColor = ImageNextSurface,
+            shape = RoundedCornerShape(16.dp),
         )
     }
 }

@@ -62,6 +62,7 @@ class PhotosViewModel(
     init {
         observeSync()
         triggerThumbnailBackfillIfNeeded()
+        enableAutoSync()
     }
 
     private fun observeSync() {
@@ -78,6 +79,16 @@ class PhotosViewModel(
             delay(INITIAL_BACKFILL_DELAY_MS)
             syncOrchestrator.scheduleThumbnailBackfillIfNeeded()
         }
+    }
+
+    private fun enableAutoSync() {
+        syncOrchestrator.ensureAutoSyncScheduled()
+    }
+
+    /** Pull-to-refresh entrypoint for immediate server-side change detection. */
+    fun refreshPhotos() {
+        // User-initiated refresh should replace any stale/infinite in-flight run.
+        syncOrchestrator.retrySync()
     }
 
     /** Retries sync or re-queues partial thumbnail failures on demand. */

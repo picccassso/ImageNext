@@ -5,8 +5,10 @@ import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.imagenext.core.database.AppDatabase
@@ -145,20 +147,45 @@ class SyncOrchestrator(
      * Thumbnail generation can then overlap with metadata sync as items arrive.
      */
     fun scheduleSyncForFolders() {
-        logPerf("sync_schedule_full")
+        enqueueLibrarySync(existingWorkPolicy = ExistingWorkPolicy.REPLACE)
+    }
+
+    /**
+     * Requests a foreground-safe metadata refresh.
+     *
+     * Uses KEEP policy to avoid interrupting any in-flight library sync while
+     * still allowing fresh sync work to be enqueued once the previous run has
+     * completed.
+     */
+    fun requestSyncNow() {
+        enqueueLibrarySync(existingWorkPolicy = ExistingWorkPolicy.KEEP)
+    }
+
+    /**
+     * Ensures background auto-sync is scheduled for recurring library updates.
+     */
+    fun ensureAutoSyncScheduled() {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
-        val syncRequest = createLibrarySyncRequest(constraints)
-        workManager.enqueueUniqueWork(
-            LibrarySyncWorker.WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            syncRequest,
+        val request = PeriodicWorkRequestBuilder<AutoSyncKickWorker>(
+            AUTO_SYNC_INTERVAL_MINUTES,
+            TimeUnit.MINUTES,
         )
-        ThumbnailWorker.enqueueBackfill(context)
+            .setConstraints(constraints)
+            .setBackoffCriteria(
+                BackoffPolicy.EXPONENTIAL,
+                30,
+                TimeUnit.SECONDS,
+            )
+            .build()
 
-        _syncState.value = SyncState.Running
+        workManager.enqueueUniquePeriodicWork(
+            AutoSyncKickWorker.WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            request,
+        )
     }
 
     /**
@@ -201,6 +228,7 @@ class SyncOrchestrator(
     fun cancelSync() {
         workManager.cancelUniqueWork(LibrarySyncWorker.WORK_NAME)
         workManager.cancelUniqueWork(ThumbnailWorker.WORK_NAME)
+        workManager.cancelUniqueWork(AutoSyncKickWorker.WORK_NAME)
         _syncState.value = SyncState.Idle
     }
 
@@ -254,8 +282,13 @@ class SyncOrchestrator(
         val latestLibraryState = latestLibraryInfo?.state
         val latestThumbnailState = latestThumbnailInfo?.state
 
-        // Running is reserved for active metadata indexing.
-        if (latestLibraryState == WorkInfo.State.RUNNING || latestLibraryState == WorkInfo.State.ENQUEUED) {
+        // Treat enqueued/blocked library work as in-flight to avoid stale failed-state flashes
+        // when a fresh sync has already been scheduled.
+        if (
+            latestLibraryState == WorkInfo.State.RUNNING ||
+            latestLibraryState == WorkInfo.State.ENQUEUED ||
+            latestLibraryState == WorkInfo.State.BLOCKED
+        ) {
             return SyncState.Running
         }
 
@@ -315,6 +348,23 @@ class SyncOrchestrator(
             )
             .build()
 
+    private fun enqueueLibrarySync(existingWorkPolicy: ExistingWorkPolicy) {
+        logPerf("sync_schedule_full policy=$existingWorkPolicy")
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val syncRequest = createLibrarySyncRequest(constraints)
+        workManager.enqueueUniqueWork(
+            LibrarySyncWorker.WORK_NAME,
+            existingWorkPolicy,
+            syncRequest,
+        )
+        ThumbnailWorker.enqueueBackfill(context)
+
+        _syncState.value = SyncState.Running
+    }
+
     private fun createThumbnailRequest(constraints: Constraints) =
         OneTimeWorkRequestBuilder<ThumbnailWorker>()
             .setConstraints(constraints)
@@ -338,5 +388,6 @@ class SyncOrchestrator(
     private companion object {
         const val PERF_TAG = "ImageNextPerf"
         const val TRANSIENT_ERROR_UNREACHABLE = "unreachable"
+        const val AUTO_SYNC_INTERVAL_MINUTES = 15L
     }
 }
