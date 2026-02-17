@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.map
  * Timeline query contract and implementation.
  *
  * Provides paged access to media items for the Photos timeline,
- * ordered by lastModified descending (newest first).
+ * ordered by precomputed timeline timestamp descending (newest first).
  */
 class TimelineRepository(
     private val mediaDao: MediaDao,
@@ -29,9 +29,10 @@ class TimelineRepository(
     fun getTimelinePaged(): Flow<PagingData<MediaItem>> {
         return Pager(
             config = PagingConfig(
-                pageSize = 60,
-                prefetchDistance = 30,
-                initialLoadSize = 90,
+                // Larger pages and prefetch reduce visible hitching during aggressive flings.
+                pageSize = 90,
+                prefetchDistance = 60,
+                initialLoadSize = 120,
                 enablePlaceholders = false,
             ),
             pagingSourceFactory = { mediaDao.getTimelinePaged() },

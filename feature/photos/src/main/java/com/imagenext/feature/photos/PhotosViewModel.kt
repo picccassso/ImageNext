@@ -1,6 +1,5 @@
 package com.imagenext.feature.photos
 
-import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -11,6 +10,7 @@ import androidx.paging.map
 import com.imagenext.core.data.TimelineRepository
 import com.imagenext.core.model.SyncState
 import com.imagenext.core.sync.SyncOrchestrator
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,16 +59,6 @@ class PhotosViewModel(
     private val _syncState = MutableStateFlow(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
 
-    /** Compact sync diagnostics line for in-app debugging. */
-    private val _syncDebugLine = MutableStateFlow<String?>(null)
-    val syncDebugLine: StateFlow<String?> = _syncDebugLine.asStateFlow()
-
-    /** Prevents endless auto-retry loops for exhausted failures. */
-    private var attemptedAutoRecoverForExhausted = false
-
-    /** Last timestamp (elapsed realtime) when debug text was emitted to UI. */
-    private var lastDebugEmitElapsedMs: Long = 0L
-
     init {
         observeSync()
         triggerThumbnailBackfillIfNeeded()
@@ -76,16 +66,16 @@ class PhotosViewModel(
 
     private fun observeSync() {
         viewModelScope.launch {
-            syncOrchestrator.observeSyncDiagnostics().collect { diagnostics ->
-                _syncState.value = diagnostics.syncState
-                emitDebugLineIfNeeded(diagnostics)
-                maybeAutoRecoverExhaustedFailures(diagnostics)
+            syncOrchestrator.observeSyncState().collect { syncState ->
+                _syncState.value = syncState
             }
         }
     }
 
     private fun triggerThumbnailBackfillIfNeeded() {
         viewModelScope.launch {
+            // Let startup interactions settle before background thumbnail backfill.
+            delay(INITIAL_BACKFILL_DELAY_MS)
             syncOrchestrator.scheduleThumbnailBackfillIfNeeded()
         }
     }
@@ -95,48 +85,14 @@ class PhotosViewModel(
         viewModelScope.launch {
             if (_syncState.value == SyncState.Partial) {
                 syncOrchestrator.scheduleThumbnailBackfillIfNeeded(requeueExhaustedFailures = true)
-                attemptedAutoRecoverForExhausted = true
             } else {
                 syncOrchestrator.retrySync()
             }
         }
     }
 
-    private fun maybeAutoRecoverExhaustedFailures(diagnostics: SyncOrchestrator.SyncDebugSnapshot) {
-        if (diagnostics.exhaustedFailureCount <= 0) {
-            attemptedAutoRecoverForExhausted = false
-            return
-        }
-
-        if (attemptedAutoRecoverForExhausted) return
-
-        val shouldAutoRecover =
-            diagnostics.syncState == SyncState.Partial &&
-                diagnostics.pendingThumbnailCount == 0
-
-        if (!shouldAutoRecover) return
-
-        attemptedAutoRecoverForExhausted = true
-        viewModelScope.launch {
-            syncOrchestrator.scheduleThumbnailBackfillIfNeeded(requeueExhaustedFailures = true)
-        }
-    }
-
-    private fun emitDebugLineIfNeeded(diagnostics: SyncOrchestrator.SyncDebugSnapshot) {
-        val line = diagnostics.toDebugLine()
-        if (line == _syncDebugLine.value) return
-
-        val now = SystemClock.elapsedRealtime()
-        val isTerminalish = diagnostics.pendingThumbnailCount == 0 || diagnostics.exhaustedFailureCount > 0
-        val canEmit = isTerminalish || (now - lastDebugEmitElapsedMs) >= DEBUG_LINE_MIN_UPDATE_MS
-        if (!canEmit) return
-
-        _syncDebugLine.value = line
-        lastDebugEmitElapsedMs = now
-    }
-
     private companion object {
-        const val DEBUG_LINE_MIN_UPDATE_MS = 400L
+        const val INITIAL_BACKFILL_DELAY_MS = 2500L
     }
 }
 

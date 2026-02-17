@@ -21,7 +21,9 @@ class StubMediaDao : MediaDao {
     override suspend fun markThumbnailFailed(remotePath: String, errorCode: String) {}
     override suspend fun resetThumbnailState(remotePath: String) {}
     override suspend fun getPendingThumbnailCount(maxRetryCount: Int): Int = 0
+    override fun observePendingThumbnailCount(maxRetryCount: Int): Flow<Int> = emptyFlow()
     override suspend fun getExhaustedThumbnailFailureCount(maxRetryCount: Int): Int = 0
+    override fun observeExhaustedThumbnailFailureCount(maxRetryCount: Int): Flow<Int> = emptyFlow()
     override suspend fun getDominantExhaustedThumbnailError(maxRetryCount: Int): String? = null
     override suspend fun getExhaustedThumbnailFailureCountByError(maxRetryCount: Int, errorCode: String): Int = 0
     override suspend fun requeueExhaustedThumbnailFailures(maxRetryCount: Int): Int = 0

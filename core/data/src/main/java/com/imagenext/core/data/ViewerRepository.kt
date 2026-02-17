@@ -48,7 +48,7 @@ open class ViewerRepository(
         }
     }
 
-    /** Returns all media items ordered by lastModified descending (timeline order). */
+    /** Returns all media items ordered by timeline timestamp descending. */
     open suspend fun getAllMediaOrdered(): List<MediaItem> {
         return mediaDao.getAllMediaList().map {
             MediaItem(

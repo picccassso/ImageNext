@@ -21,14 +21,14 @@ import kotlinx.coroutines.flow.Flow
 interface MediaDao {
 
     /** Observes all media items ordered by timeline date (newest first). */
-    @Query("SELECT * FROM media_items ORDER BY COALESCE(captureTimestamp, lastModified) DESC")
+    @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC")
     fun getAllMedia(): Flow<List<MediaItemEntity>>
 
     /** Observes media items for a specific folder. */
     @Query(
         "SELECT * FROM media_items " +
             "WHERE folderPath = :folderPath " +
-            "ORDER BY COALESCE(captureTimestamp, lastModified) DESC"
+            "ORDER BY timelineSortKey DESC"
     )
     fun getMediaByFolder(folderPath: String): Flow<List<MediaItemEntity>>
 
@@ -51,7 +51,7 @@ interface MediaDao {
             "OR (thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' AND thumbnailRetryCount < :maxRetryCount) " +
             "ORDER BY CASE thumbnailStatus " +
             "WHEN '$THUMBNAIL_STATUS_PENDING' THEN 0 ELSE 1 END, " +
-            "COALESCE(captureTimestamp, lastModified) DESC " +
+            "timelineSortKey DESC " +
             "LIMIT :limit"
     )
     suspend fun getItemsNeedingThumbnail(limit: Int, maxRetryCount: Int): List<MediaItemEntity>
@@ -96,12 +96,27 @@ interface MediaDao {
     )
     suspend fun getPendingThumbnailCount(maxRetryCount: Int): Int
 
+    /** Reactive count of retryable thumbnail backlog items. */
+    @Query(
+        "SELECT COUNT(*) FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_PENDING' " +
+            "OR (thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' AND thumbnailRetryCount < :maxRetryCount)"
+    )
+    fun observePendingThumbnailCount(maxRetryCount: Int): Flow<Int>
+
     /** Count of permanently failed thumbnail items after retry budget is exhausted. */
     @Query(
         "SELECT COUNT(*) FROM media_items " +
             "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' AND thumbnailRetryCount >= :maxRetryCount"
     )
     suspend fun getExhaustedThumbnailFailureCount(maxRetryCount: Int): Int
+
+    /** Reactive count of permanently failed thumbnail items. */
+    @Query(
+        "SELECT COUNT(*) FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' AND thumbnailRetryCount >= :maxRetryCount"
+    )
+    fun observeExhaustedThumbnailFailureCount(maxRetryCount: Int): Flow<Int>
 
     /** Most common error code among exhausted thumbnail failures. */
     @Query(
@@ -148,7 +163,7 @@ interface MediaDao {
     suspend fun requeueExhaustedThumbnailFailuresByError(maxRetryCount: Int, errorCode: String): Int
 
     /** Paged timeline query ordered by timeline date (newest first). */
-    @Query("SELECT * FROM media_items ORDER BY COALESCE(captureTimestamp, lastModified) DESC")
+    @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC")
     fun getTimelinePaged(): PagingSource<Int, MediaItemEntity>
 
     /** Returns a single media item by its remote path. */
@@ -156,7 +171,7 @@ interface MediaDao {
     suspend fun getByRemotePath(remotePath: String): MediaItemEntity?
 
     /** Returns all media items ordered by timeline date descending (for viewer index lookup). */
-    @Query("SELECT * FROM media_items ORDER BY COALESCE(captureTimestamp, lastModified) DESC")
+    @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC")
     suspend fun getAllMediaList(): List<MediaItemEntity>
 
     /** Returns all matching media items for bulk merge logic. */

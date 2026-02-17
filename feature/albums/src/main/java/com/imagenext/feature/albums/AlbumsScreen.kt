@@ -1,8 +1,6 @@
 package com.imagenext.feature.albums
 
 import android.content.Context
-import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,7 +29,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.imagenext.core.model.Album
 import com.imagenext.designsystem.ImageNextBlack
-import com.imagenext.designsystem.Motion
 import java.io.File
 
 private const val GRID_COLUMNS = 2
@@ -55,7 +52,7 @@ fun AlbumsScreen(
                 )
             }
         }
-        
+
         // Glossy top fade
         Canvas(modifier = Modifier.fillMaxWidth().height(24.dp)) {
             drawRect(
@@ -91,31 +88,11 @@ private fun AlbumGrid(
             )
         }
 
-        itemsIndexed(albums, key = { _, album -> album.folderPath }) { index, album ->
-            var isVisible by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) { isVisible = true }
-
-            AnimatedVisibility(
-                visible = isVisible,
-                enter = slideInVertically(
-                    initialOffsetY = { 40 },
-                    animationSpec = tween(
-                        durationMillis = Motion.DURATION_LONG_MS,
-                        delayMillis = index * 50,
-                        easing = Motion.Easing.Emphasized
-                    )
-                ) + fadeIn(
-                    animationSpec = tween(
-                        durationMillis = Motion.DURATION_LONG_MS,
-                        delayMillis = index * 50
-                    )
-                )
-            ) {
-                AlbumCard(
-                    album = album,
-                    onClick = { onAlbumClick(album.folderPath) },
-                )
-            }
+        items(items = albums, key = { it.folderPath }) { album ->
+            AlbumCard(
+                album = album,
+                onClick = { onAlbumClick(album.folderPath) },
+            )
         }
     }
 }

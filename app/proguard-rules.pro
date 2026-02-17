@@ -76,3 +76,6 @@
 
 # ---- Prevent stripping of security-critical classes ----
 -keep class com.imagenext.core.security.** { *; }
+
+# ---- Google ErrorProne (Tink dependency) ----
+-dontwarn com.google.errorprone.annotations.**

@@ -17,7 +17,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
@@ -38,9 +40,12 @@ class SyncOrchestrator(
 ) {
 
     private val workManager = WorkManager.getInstance(context)
+    private val mediaDao by lazy { AppDatabase.getInstance(context).mediaDao() }
 
     private val _syncState = MutableStateFlow(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
+
+    private var dominantErrorSnapshot: DominantErrorSnapshot? = null
 
     /** Snapshot used for UI diagnostics while tuning sync behavior. */
     data class SyncDebugSnapshot(
@@ -64,17 +69,12 @@ class SyncOrchestrator(
      * Observes the sync work state from WorkManager.
      */
     fun observeSyncState(): Flow<SyncState> {
-        return observeSyncDiagnostics().map { it.syncState }
-    }
-
-    /**
-     * Observes sync state with low-level diagnostics for UI debugging.
-     */
-    fun observeSyncDiagnostics(): Flow<SyncDebugSnapshot> {
         return combine(
             workManager.getWorkInfosForUniqueWorkFlow(LibrarySyncWorker.WORK_NAME),
             workManager.getWorkInfosForUniqueWorkFlow(ThumbnailWorker.WORK_NAME),
-        ) { libraryInfos, thumbnailInfos ->
+            mediaDao.observePendingThumbnailCount(ThumbnailWorker.MAX_RETRY_ATTEMPTS),
+            mediaDao.observeExhaustedThumbnailFailureCount(ThumbnailWorker.MAX_RETRY_ATTEMPTS),
+        ) { libraryInfos, thumbnailInfos, pendingThumbnailCount, exhaustedFailureCount ->
             val latestLibraryInfo = latestInfoForWorker(
                 infos = libraryInfos,
                 workerTag = LibrarySyncWorker::class.java.name,
@@ -84,30 +84,39 @@ class SyncOrchestrator(
                 workerTag = ThumbnailWorker::class.java.name,
             )
 
-            val mediaDao = AppDatabase.getInstance(context).mediaDao()
-            val pendingThumbnailCount = withContext(Dispatchers.IO) {
-                mediaDao.getPendingThumbnailCount(ThumbnailWorker.MAX_RETRY_ATTEMPTS)
-            }
-            val exhaustedFailureCount = withContext(Dispatchers.IO) {
-                mediaDao.getExhaustedThumbnailFailureCount(ThumbnailWorker.MAX_RETRY_ATTEMPTS)
-            }
-            val dominantError = if (exhaustedFailureCount > 0) {
-                withContext(Dispatchers.IO) {
-                    mediaDao.getDominantExhaustedThumbnailError(ThumbnailWorker.MAX_RETRY_ATTEMPTS)
-                }
-            } else {
-                null
-            }
-            val dominantErrorCount = if (dominantError != null) {
-                withContext(Dispatchers.IO) {
-                    mediaDao.getExhaustedThumbnailFailureCountByError(
-                        ThumbnailWorker.MAX_RETRY_ATTEMPTS,
-                        dominantError,
-                    )
-                }
-            } else {
-                0
-            }
+            mapWorkInfoToSyncState(
+                latestLibraryInfo = latestLibraryInfo,
+                latestThumbnailInfo = latestThumbnailInfo,
+                pendingThumbnailCount = pendingThumbnailCount,
+                exhaustedFailureCount = exhaustedFailureCount,
+            )
+        }
+            .distinctUntilChanged()
+            .onEach { state -> _syncState.value = state }
+    }
+
+    /**
+     * Observes sync state with low-level diagnostics for UI debugging.
+     */
+    fun observeSyncDiagnostics(): Flow<SyncDebugSnapshot> {
+        return combine(
+            workManager.getWorkInfosForUniqueWorkFlow(LibrarySyncWorker.WORK_NAME),
+            workManager.getWorkInfosForUniqueWorkFlow(ThumbnailWorker.WORK_NAME),
+            mediaDao.observePendingThumbnailCount(ThumbnailWorker.MAX_RETRY_ATTEMPTS),
+            mediaDao.observeExhaustedThumbnailFailureCount(ThumbnailWorker.MAX_RETRY_ATTEMPTS),
+        ) { libraryInfos, thumbnailInfos, pendingThumbnailCount, exhaustedFailureCount ->
+            val latestLibraryInfo = latestInfoForWorker(
+                infos = libraryInfos,
+                workerTag = LibrarySyncWorker::class.java.name,
+            )
+            val latestThumbnailInfo = latestInfoForWorker(
+                infos = thumbnailInfos,
+                workerTag = ThumbnailWorker::class.java.name,
+            )
+
+            val dominantErrorDetails = resolveDominantErrorDetails(exhaustedFailureCount)
+            val dominantError = dominantErrorDetails.first
+            val dominantErrorCount = dominantErrorDetails.second
 
             val state = mapWorkInfoToSyncState(
                 latestLibraryInfo = latestLibraryInfo,
@@ -126,14 +135,14 @@ class SyncOrchestrator(
                 dominantExhaustedError = dominantError,
                 dominantExhaustedErrorCount = dominantErrorCount,
             )
-        }
+        }.distinctUntilChanged()
     }
 
     /**
      * Schedules a sync for all selected folders.
      *
-     * Enqueues a [LibrarySyncWorker] then chains a [ThumbnailWorker].
-     * Uses unique work to prevent duplicate jobs.
+     * Enqueues [LibrarySyncWorker] and proactively primes thumbnail backfill.
+     * Thumbnail generation can then overlap with metadata sync as items arrive.
      */
     fun scheduleSyncForFolders() {
         logPerf("sync_schedule_full")
@@ -142,16 +151,12 @@ class SyncOrchestrator(
             .build()
 
         val syncRequest = createLibrarySyncRequest(constraints)
-        val thumbnailRequest = createThumbnailRequest(constraints)
-
-        workManager
-            .beginUniqueWork(
-                LibrarySyncWorker.WORK_NAME,
-                ExistingWorkPolicy.REPLACE,
-                syncRequest,
-            )
-            .then(thumbnailRequest)
-            .enqueue()
+        workManager.enqueueUniqueWork(
+            LibrarySyncWorker.WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            syncRequest,
+        )
+        ThumbnailWorker.enqueueBackfill(context)
 
         _syncState.value = SyncState.Running
     }
@@ -161,7 +166,6 @@ class SyncOrchestrator(
      * Used by Photos entry to self-heal partially indexed libraries.
      */
     suspend fun scheduleThumbnailBackfillIfNeeded(requeueExhaustedFailures: Boolean = false) {
-        val mediaDao = AppDatabase.getInstance(context).mediaDao()
         if (requeueExhaustedFailures) {
             withContext(Dispatchers.IO) {
                 mediaDao.requeueExhaustedThumbnailFailures(ThumbnailWorker.MAX_RETRY_ATTEMPTS)
@@ -205,6 +209,40 @@ class SyncOrchestrator(
      */
     fun retrySync() {
         scheduleSyncForFolders()
+    }
+
+    private suspend fun resolveDominantErrorDetails(exhaustedFailureCount: Int): Pair<String?, Int> {
+        if (exhaustedFailureCount <= 0) {
+            dominantErrorSnapshot = null
+            return null to 0
+        }
+
+        dominantErrorSnapshot?.let { snapshot ->
+            if (snapshot.exhaustedFailureCount == exhaustedFailureCount) {
+                return snapshot.errorCode to snapshot.errorCount
+            }
+        }
+
+        val dominantError = withContext(Dispatchers.IO) {
+            mediaDao.getDominantExhaustedThumbnailError(ThumbnailWorker.MAX_RETRY_ATTEMPTS)
+        }
+        val dominantErrorCount = if (dominantError != null) {
+            withContext(Dispatchers.IO) {
+                mediaDao.getExhaustedThumbnailFailureCountByError(
+                    ThumbnailWorker.MAX_RETRY_ATTEMPTS,
+                    dominantError,
+                )
+            }
+        } else {
+            0
+        }
+
+        dominantErrorSnapshot = DominantErrorSnapshot(
+            exhaustedFailureCount = exhaustedFailureCount,
+            errorCode = dominantError,
+            errorCount = dominantErrorCount,
+        )
+        return dominantError to dominantErrorCount
     }
 
     private fun mapWorkInfoToSyncState(
@@ -290,6 +328,12 @@ class SyncOrchestrator(
     private fun logPerf(message: String) {
         Log.d(PERF_TAG, message)
     }
+
+    private data class DominantErrorSnapshot(
+        val exhaustedFailureCount: Int,
+        val errorCode: String?,
+        val errorCount: Int,
+    )
 
     private companion object {
         const val PERF_TAG = "ImageNextPerf"

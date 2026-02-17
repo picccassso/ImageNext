@@ -12,17 +12,37 @@ class SessionRepositoryImpl(
     private val vault: CredentialVault,
 ) : SessionRepository {
 
-    override fun getSession(): AuthSession? = vault.readSession()
+    @Volatile
+    private var cachedSession: AuthSession? = null
+
+    @Volatile
+    private var isCacheInitialized: Boolean = false
+
+    override fun getSession(): AuthSession? {
+        if (isCacheInitialized) return cachedSession
+
+        return synchronized(this) {
+            if (!isCacheInitialized) {
+                cachedSession = vault.readSession()
+                isCacheInitialized = true
+            }
+            cachedSession
+        }
+    }
 
     override fun saveSession(session: AuthSession) {
         vault.storeSession(session)
+        cachedSession = session
+        isCacheInitialized = true
     }
 
     override fun clearSession() {
         vault.clearSession()
+        cachedSession = null
+        isCacheInitialized = true
     }
 
-    override fun hasValidSession(): Boolean = vault.readSession() != null
+    override fun hasValidSession(): Boolean = getSession() != null
 
     override fun savePendingPollState(pollEndpoint: String, pollToken: String, serverUrl: String) {
         vault.storePendingPollState(pollEndpoint, pollToken, serverUrl)

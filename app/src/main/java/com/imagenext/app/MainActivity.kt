@@ -41,6 +41,8 @@ import com.imagenext.feature.onboarding.OnboardingViewModelFactory
 import com.imagenext.navigation.AppNavHost
 import com.imagenext.navigation.BottomNavDestination
 import com.imagenext.navigation.NavRoutes
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,7 +56,10 @@ class MainActivity : ComponentActivity() {
                 var startDestination by remember { mutableStateOf<String?>(null) }
 
                 LaunchedEffect(Unit) {
-                    startDestination = when (app.appStartRouter.resolveStartDestination()) {
+                    val destination = withContext(Dispatchers.IO) {
+                        app.appStartRouter.resolveStartDestination()
+                    }
+                    startDestination = when (destination) {
                         AppStartRouter.StartDestination.ONBOARDING -> NavRoutes.ONBOARDING
                         AppStartRouter.StartDestination.FOLDER_SELECTION -> NavRoutes.FOLDER_SELECTION
                         AppStartRouter.StartDestination.MAIN -> NavRoutes.PHOTOS

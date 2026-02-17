@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -13,6 +12,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollScope
+import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -42,9 +45,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,14 +74,15 @@ import com.imagenext.core.model.MediaItem
 import com.imagenext.core.model.SyncState
 import com.imagenext.core.sync.SyncDependencies
 import com.imagenext.designsystem.ImageNextBlack
-import com.imagenext.designsystem.Motion
 import java.io.File
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
 private const val GRID_COLUMNS = 3
+private const val GRID_PREVIEW_SIZE = 256
 private const val PERF_TAG = "ImageNextPerf"
+private const val MAX_FLING_VELOCITY_PX_PER_SECOND = 8500f
 
 @Composable
 fun PhotosScreen(
@@ -85,24 +91,59 @@ fun PhotosScreen(
     modifier: Modifier = Modifier,
 ) {
     val screenStartMs = remember { SystemClock.elapsedRealtime() }
+    val context = LocalContext.current
+    val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
+    val defaultFlingBehavior = ScrollableDefaults.flingBehavior()
+    val gridFlingBehavior = remember(defaultFlingBehavior) {
+        VelocityCappedFlingBehavior(
+            delegate = defaultFlingBehavior,
+            maxAbsVelocityPxPerSecond = MAX_FLING_VELOCITY_PX_PER_SECOND,
+        )
+    }
     val pagingItems = viewModel.timelineItems.collectAsLazyPagingItems()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
-    val isInitialLoad = pagingItems.loadState.refresh is LoadState.Loading && pagingItems.itemCount == 0
-    val isInitialError = pagingItems.loadState.refresh is LoadState.Error && pagingItems.itemCount == 0
+    var hasDisplayedPhotos by rememberSaveable { mutableStateOf(false) }
+    val allowRemotePreview by remember(gridState) {
+        derivedStateOf { !gridState.isScrollInProgress }
+    }
+    val remotePreviewAuth = remember(context) {
+        SyncDependencies.getSessionRepository(context)
+            ?.getSession()
+            ?.let { session ->
+                RemotePreviewAuth(
+                    serverUrl = session.serverUrl,
+                    authHeader = buildBasicAuthHeader(
+                        username = session.loginName,
+                        password = session.appPassword,
+                    ),
+                )
+            }
+    }
+    val isInitialLoad =
+        pagingItems.loadState.refresh is LoadState.Loading &&
+            pagingItems.itemCount == 0 &&
+            !hasDisplayedPhotos
+    val isInitialError =
+        pagingItems.loadState.refresh is LoadState.Error &&
+            pagingItems.itemCount == 0 &&
+            !hasDisplayedPhotos
     var loggedInitialLoadDone by remember { mutableStateOf(false) }
     var loggedFirstItemsVisible by remember { mutableStateOf(false) }
+
+    LaunchedEffect(pagingItems.itemCount) {
+        if (pagingItems.itemCount > 0) {
+            hasDisplayedPhotos = true
+            if (!loggedFirstItemsVisible) {
+                Log.d(PERF_TAG, "photos_first_items_visible_ms=${SystemClock.elapsedRealtime() - screenStartMs}")
+                loggedFirstItemsVisible = true
+            }
+        }
+    }
 
     LaunchedEffect(isInitialLoad) {
         if (!loggedInitialLoadDone && !isInitialLoad) {
             Log.d(PERF_TAG, "photos_initial_load_done_ms=${SystemClock.elapsedRealtime() - screenStartMs}")
             loggedInitialLoadDone = true
-        }
-    }
-
-    LaunchedEffect(pagingItems.itemCount) {
-        if (!loggedFirstItemsVisible && pagingItems.itemCount > 0) {
-            Log.d(PERF_TAG, "photos_first_items_visible_ms=${SystemClock.elapsedRealtime() - screenStartMs}")
-            loggedFirstItemsVisible = true
         }
     }
 
@@ -119,19 +160,24 @@ fun PhotosScreen(
                         onRetry = { pagingItems.retry() },
                     )
                 }
-                pagingItems.loadState.refresh is LoadState.NotLoading && pagingItems.itemCount == 0 -> {
+                pagingItems.loadState.refresh is LoadState.NotLoading &&
+                    pagingItems.itemCount == 0 -> {
                     EmptyState(syncState = syncState)
                 }
                 else -> {
                     PhotosGrid(
                         pagingItems = pagingItems,
+                        gridState = gridState,
+                        flingBehavior = gridFlingBehavior,
+                        allowRemotePreview = allowRemotePreview,
                         onPhotoClick = onPhotoClick,
+                        remotePreviewAuth = remotePreviewAuth,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
         }
-        
+
         // Glossy top fade
         Canvas(modifier = Modifier.fillMaxWidth().height(24.dp)) {
             drawRect(
@@ -146,11 +192,17 @@ fun PhotosScreen(
 @Composable
 private fun PhotosGrid(
     pagingItems: LazyPagingItems<TimelineItem>,
+    gridState: LazyGridState,
+    flingBehavior: FlingBehavior,
+    allowRemotePreview: Boolean,
     onPhotoClick: (String) -> Unit,
+    remotePreviewAuth: RemotePreviewAuth?,
     modifier: Modifier = Modifier,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(GRID_COLUMNS),
+        state = gridState,
+        flingBehavior = flingBehavior,
         modifier = modifier,
         contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -165,6 +217,13 @@ private fun PhotosGrid(
                     null -> "placeholder_$index"
                 }
             },
+            contentType = { index ->
+                when (pagingItems[index]) {
+                    is TimelineItem.Header -> "header"
+                    is TimelineItem.Photo -> "photo"
+                    null -> "placeholder"
+                }
+            },
             span = { index ->
                 when (pagingItems[index]) {
                     is TimelineItem.Header -> GridItemSpan(GRID_COLUMNS)
@@ -172,51 +231,33 @@ private fun PhotosGrid(
                 }
             },
         ) { index ->
-            var isVisible by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) { isVisible = true }
-
-            AnimatedVisibility(
-                visible = isVisible,
-                enter = slideInVertically(
-                    initialOffsetY = { 40 },
-                    animationSpec = tween(
-                        durationMillis = Motion.DURATION_LONG_MS,
-                        delayMillis = (index % (GRID_COLUMNS * 4)) * 30, // Subtle stagger
-                        easing = Motion.Easing.Emphasized
+            when (val item = pagingItems[index]) {
+                is TimelineItem.Header -> {
+                    Text(
+                        text = item.label,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
                     )
-                ) + fadeIn(
-                    animationSpec = tween(
-                        durationMillis = Motion.DURATION_LONG_MS,
-                        delayMillis = (index % (GRID_COLUMNS * 4)) * 30
+                }
+                is TimelineItem.Photo -> {
+                    ThumbnailCell(
+                        mediaItem = item.mediaItem,
+                        remotePreviewAuth = remotePreviewAuth,
+                        allowRemotePreview = allowRemotePreview,
+                        onClick = { onPhotoClick(item.mediaItem.remotePath) },
                     )
-                )
-            ) {
-                when (val item = pagingItems[index]) {
-                    is TimelineItem.Header -> {
-                        Text(
-                            text = item.label,
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp
-                            ),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
-                        )
-                    }
-                    is TimelineItem.Photo -> {
-                        ThumbnailCell(
-                            mediaItem = item.mediaItem,
-                            onClick = { onPhotoClick(item.mediaItem.remotePath) },
-                        )
-                    }
-                    null -> {
-                        Box(
-                            modifier = Modifier
-                                .aspectRatio(1f)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                        )
-                    }
+                }
+                null -> {
+                    Box(
+                        modifier = Modifier
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                    )
                 }
             }
         }
@@ -234,12 +275,24 @@ private fun PhotosGrid(
 @Composable
 private fun ThumbnailCell(
     mediaItem: MediaItem,
+    remotePreviewAuth: RemotePreviewAuth?,
+    allowRemotePreview: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val thumbnailModel = remember(mediaItem.remotePath, mediaItem.thumbnailPath) {
-        resolveGridImageModel(context, mediaItem)
+    val thumbnailModel = remember(
+        mediaItem.remotePath,
+        mediaItem.thumbnailPath,
+        remotePreviewAuth,
+        allowRemotePreview,
+    ) {
+        resolveGridImageModel(
+            context = context,
+            mediaItem = mediaItem,
+            remotePreviewAuth = remotePreviewAuth,
+            allowRemotePreview = allowRemotePreview,
+        )
     }
 
     Box(
@@ -415,31 +468,29 @@ private fun SyncStatusBar(syncState: SyncState, onRetry: () -> Unit) {
     }
 }
 
-private fun resolveGridImageModel(context: Context, mediaItem: MediaItem): Any? {
+private fun resolveGridImageModel(
+    context: Context,
+    mediaItem: MediaItem,
+    remotePreviewAuth: RemotePreviewAuth?,
+    allowRemotePreview: Boolean,
+): Any? {
     val localThumbnail = mediaItem.thumbnailPath?.let { path ->
         val file = File(path)
         if (file.exists()) file else null
     }
     if (localThumbnail != null) return localThumbnail
-
-    val sessionRepository = SyncDependencies.getSessionRepository(context) ?: return null
-    val session = sessionRepository.getSession() ?: return null
+    if (!allowRemotePreview) return null
 
     val previewUrl = buildPreviewUrl(
-        serverUrl = session.serverUrl,
+        serverUrl = remotePreviewAuth?.serverUrl ?: return null,
         remotePath = mediaItem.remotePath,
-    )
-
-    val authHeader = buildBasicAuthHeader(
-        username = session.loginName,
-        password = session.appPassword,
     )
 
     return ImageRequest.Builder(context)
         .data(previewUrl)
         .httpHeaders(
             NetworkHeaders.Builder()
-                .set("Authorization", authHeader)
+                .set("Authorization", remotePreviewAuth.authHeader)
                 .set("OCS-APIRequest", "true")
                 .build()
         )
@@ -449,10 +500,28 @@ private fun resolveGridImageModel(context: Context, mediaItem: MediaItem): Any? 
 private fun buildPreviewUrl(serverUrl: String, remotePath: String): String {
     val encodedPath = URLEncoder.encode(remotePath, StandardCharsets.UTF_8.name())
         .replace("+", "%20")
-    return "$serverUrl/index.php/core/preview?file=$encodedPath&x=512&y=512&a=1"
+    return "$serverUrl/index.php/core/preview?file=$encodedPath&x=$GRID_PREVIEW_SIZE&y=$GRID_PREVIEW_SIZE&a=1"
 }
 
 private fun buildBasicAuthHeader(username: String, password: String): String {
     val encoded = Base64.getEncoder().encodeToString("$username:$password".toByteArray())
     return "Basic $encoded"
+}
+
+private data class RemotePreviewAuth(
+    val serverUrl: String,
+    val authHeader: String,
+)
+
+private class VelocityCappedFlingBehavior(
+    private val delegate: FlingBehavior,
+    private val maxAbsVelocityPxPerSecond: Float,
+) : FlingBehavior {
+    override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+        val cappedVelocity = initialVelocity.coerceIn(
+            -maxAbsVelocityPxPerSecond,
+            maxAbsVelocityPxPerSecond,
+        )
+        return with(delegate) { performFling(cappedVelocity) }
+    }
 }

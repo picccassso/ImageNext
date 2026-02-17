@@ -278,21 +278,12 @@ class ThumbnailWorker(
     }
 
     private fun enqueueFollowUpWork() {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
-        val followUpRequest = OneTimeWorkRequestBuilder<ThumbnailWorker>()
-            .setConstraints(constraints)
-            .setBackoffCriteria(
-                BackoffPolicy.EXPONENTIAL,
-                30,
-                TimeUnit.SECONDS,
-            )
-            .build()
-
         WorkManager.getInstance(applicationContext)
-            .enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, followUpRequest)
+            .enqueueUniqueWork(
+                WORK_NAME,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                createWorkRequest(),
+            )
     }
 
     private fun classifyError(error: Exception): String {
@@ -460,7 +451,7 @@ class ThumbnailWorker(
         const val KEY_EXHAUSTED_FAILURE_COUNT = "exhausted_failure_count"
 
         /** Number of thumbnails to fetch per batch. */
-        const val BATCH_SIZE = 50
+        const val BATCH_SIZE = 60
 
         /** Max batches processed in a single worker execution. */
         const val MAX_BATCHES_PER_RUN = 6
@@ -469,16 +460,16 @@ class ThumbnailWorker(
         const val MAX_RETRY_ATTEMPTS = 3
 
         /** Progress emit interval (items) to reduce UI/update thrash. */
-        private const val PROGRESS_UPDATE_INTERVAL = 10
+        private const val PROGRESS_UPDATE_INTERVAL = 30
 
         /** DB update commit interval (items) to reduce paging invalidations during sync. */
-        private const val DB_UPDATE_BATCH_SIZE = 25
+        private const val DB_UPDATE_BATCH_SIZE = 80
 
         /** Maximum staleness before pending DB updates are flushed. */
-        private const val DB_UPDATE_MAX_STALENESS_MS = 1000L
+        private const val DB_UPDATE_MAX_STALENESS_MS = 2000L
 
         /** Number of concurrent network fetches per loop to reduce total thumbnail latency. */
-        private const val NETWORK_CONCURRENCY = 3
+        private const val NETWORK_CONCURRENCY = 4
 
         /** Thumbnail preview size in pixels. */
         const val THUMBNAIL_SIZE = 256
@@ -489,5 +480,32 @@ class ThumbnailWorker(
         private const val ERROR_UNREACHABLE = "unreachable"
         private const val ERROR_SSL = "ssl"
         private const val ERROR_IO = "io"
+
+        /**
+         * Enqueues thumbnail backfill work if one is not already running/enqueued.
+         * Used to overlap thumbnail generation with ongoing metadata scans.
+         */
+        fun enqueueBackfill(context: Context) {
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork(
+                    WORK_NAME,
+                    ExistingWorkPolicy.KEEP,
+                    createWorkRequest(),
+                )
+        }
+
+        private fun createWorkRequest() =
+            OneTimeWorkRequestBuilder<ThumbnailWorker>()
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build()
+                )
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    30,
+                    TimeUnit.SECONDS,
+                )
+                .build()
     }
 }

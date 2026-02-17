@@ -2,6 +2,7 @@ package com.imagenext.core.database.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -10,7 +11,14 @@ import androidx.room.PrimaryKey
  * Stores metadata about media files discovered from Nextcloud WebDAV.
  * Supports timeline queries and viewer detail lookups.
  */
-@Entity(tableName = "media_items")
+@Entity(
+    tableName = "media_items",
+    indices = [
+        Index(value = ["timelineSortKey"]),
+        Index(value = ["folderPath", "timelineSortKey"]),
+        Index(value = ["thumbnailStatus", "thumbnailRetryCount", "timelineSortKey"]),
+    ],
+)
 data class MediaItemEntity(
     /** Full WebDAV remote path — unique identifier. */
     @PrimaryKey
@@ -30,6 +38,10 @@ data class MediaItemEntity(
 
     /** Best-effort capture timestamp (epoch millis), if known. */
     val captureTimestamp: Long? = null,
+
+    /** Precomputed timeline sort key (`captureTimestamp ?: lastModified`). */
+    @ColumnInfo(defaultValue = "0")
+    val timelineSortKey: Long = 0,
 
     /** Server ETag for change detection. */
     val etag: String,

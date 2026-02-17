@@ -40,8 +40,9 @@ class AlbumsViewModel(
                 if (folders.isEmpty()) {
                     AlbumsUiState.Empty
                 } else {
+                    val mediaByFolder = allMedia.groupBy { it.folderPath }
                     val albums = folders.map { folder ->
-                        val folderMedia = allMedia.filter { it.folderPath == folder.remotePath }
+                        val folderMedia = mediaByFolder[folder.remotePath].orEmpty()
                         val coverItem = folderMedia.firstOrNull()
                         Album(
                             folderPath = folder.remotePath,

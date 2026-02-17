@@ -16,7 +16,7 @@ import com.imagenext.core.database.entity.SyncCheckpointEntity
  * Room database root for ImageNext.
  *
  * Contains entities for media metadata, folder selections, and sync checkpoints.
- * Version 2 — adds capture date and thumbnail lifecycle fields.
+ * Version 3 — adds timeline sort key and query indexes for performance.
  *
  * Migration policy: future schema changes should use Room's migration API
  * to preserve user data across app updates.
@@ -27,7 +27,7 @@ import com.imagenext.core.database.entity.SyncCheckpointEntity
         SelectedFolderEntity::class,
         SyncCheckpointEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -53,6 +53,7 @@ abstract class AppDatabase : RoomDatabase() {
                     DATABASE_NAME,
                 )
                     .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }
@@ -73,6 +74,31 @@ abstract class AppDatabase : RoomDatabase() {
                         "SET thumbnailStatus = CASE " +
                         "WHEN thumbnailPath IS NOT NULL AND thumbnailPath != '' THEN 'READY' " +
                         "ELSE 'PENDING' END"
+                )
+            }
+        }
+
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE media_items " +
+                        "ADD COLUMN timelineSortKey INTEGER NOT NULL DEFAULT 0"
+                )
+                database.execSQL(
+                    "UPDATE media_items " +
+                        "SET timelineSortKey = COALESCE(captureTimestamp, lastModified)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_media_items_timelineSortKey " +
+                        "ON media_items(timelineSortKey)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_media_items_folderPath_timelineSortKey " +
+                        "ON media_items(folderPath, timelineSortKey)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_media_items_thumbnailStatus_thumbnailRetryCount_timelineSortKey " +
+                        "ON media_items(thumbnailStatus, thumbnailRetryCount, timelineSortKey)"
                 )
             }
         }

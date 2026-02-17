@@ -28,100 +28,93 @@ import com.imagenext.core.sync.SyncOrchestrator
 class ImageNextApplication : Application() {
 
     /** Keystore-backed credential vault. */
-    lateinit var credentialVault: CredentialVault
-        private set
+    val credentialVault: CredentialVault by lazy {
+        CredentialVault(this)
+    }
 
     /** Session repository for auth state management. */
-    lateinit var sessionRepository: SessionRepository
-        private set
+    val sessionRepository: SessionRepository by lazy {
+        SessionRepositoryImpl(credentialVault)
+    }
 
     /** Nextcloud auth API client. */
-    lateinit var authApi: NextcloudAuthApi
-        private set
+    val authApi: NextcloudAuthApi by lazy {
+        NextcloudAuthApi()
+    }
 
     /** Login Flow v2 client. */
-    lateinit var loginFlowClient: LoginFlowClient
-        private set
+    val loginFlowClient: LoginFlowClient by lazy {
+        LoginFlowClient()
+    }
 
     /** App start router for onboarding/main shell decision. */
-    lateinit var appStartRouter: AppStartRouter
-        private set
+    val appStartRouter: AppStartRouter by lazy {
+        AppStartRouter(
+            sessionRepository = sessionRepository,
+            folderDao = folderDao,
+        )
+    }
 
     /** Room database instance. */
-    lateinit var database: AppDatabase
-        private set
+    val database: AppDatabase by lazy {
+        AppDatabase.getInstance(this)
+    }
 
     /** WebDAV client for folder discovery and media listing. */
-    lateinit var webDavClient: WebDavClient
-        private set
+    val webDavClient: WebDavClient by lazy {
+        WebDavClient()
+    }
 
     /** Folder DAO for folder selection persistence. */
-    lateinit var folderDao: FolderDao
-        private set
+    val folderDao: FolderDao by lazy {
+        database.folderDao()
+    }
 
     /** Media DAO for media metadata queries. */
-    lateinit var mediaDao: MediaDao
-        private set
+    val mediaDao: MediaDao by lazy {
+        database.mediaDao()
+    }
 
     /** Folder repository for discovery and selection management. */
-    lateinit var folderRepository: FolderRepositoryImpl
-        private set
+    val folderRepository: FolderRepositoryImpl by lazy {
+        FolderRepositoryImpl(webDavClient, folderDao)
+    }
 
     /** Media repository for timeline and viewer access. */
-    lateinit var mediaRepository: MediaRepositoryImpl
-        private set
+    val mediaRepository: MediaRepositoryImpl by lazy {
+        MediaRepositoryImpl(mediaDao)
+    }
 
     /** Sync orchestrator for background indexing and thumbnail work. */
-    lateinit var syncOrchestrator: SyncOrchestrator
-        private set
+    val syncOrchestrator: SyncOrchestrator by lazy {
+        SyncOrchestrator(this)
+    }
 
     /** Timeline repository for paged Photos tab queries. */
-    lateinit var timelineRepository: TimelineRepository
-        private set
+    val timelineRepository: TimelineRepository by lazy {
+        TimelineRepository(mediaDao)
+    }
 
     /** Viewer repository for fullscreen viewer data access. */
-    lateinit var viewerRepository: ViewerRepository
-        private set
-
-    /** Certificate trust store for self-signed server support. */
-    lateinit var certificateTrustStore: CertificateTrustStore
-        private set
-
-    /** App lock policy manager. */
-    lateinit var appLockManager: AppLockManager
-        private set
-
-    override fun onCreate() {
-        super.onCreate()
-
-        // Phase 2 dependencies
-        credentialVault = CredentialVault(this)
-        sessionRepository = SessionRepositoryImpl(credentialVault)
-        authApi = NextcloudAuthApi()
-        loginFlowClient = LoginFlowClient()
-
-        // Phase 3 dependencies
-        database = AppDatabase.getInstance(this)
-        folderDao = database.folderDao()
-        mediaDao = database.mediaDao()
-        webDavClient = WebDavClient()
-        folderRepository = FolderRepositoryImpl(webDavClient, folderDao)
-        mediaRepository = MediaRepositoryImpl(mediaDao)
-        timelineRepository = TimelineRepository(mediaDao)
-        viewerRepository = ViewerRepository(
+    val viewerRepository: ViewerRepository by lazy {
+        ViewerRepository(
             mediaDao = mediaDao,
             sessionRepository = sessionRepository,
         )
-        syncOrchestrator = SyncOrchestrator(this)
+    }
 
-        // Router needs both session and folder repository
-        appStartRouter = AppStartRouter(sessionRepository, folderRepository)
+    /** Certificate trust store for self-signed server support. */
+    val certificateTrustStore: CertificateTrustStore by lazy {
+        CertificateTrustStore(this)
+    }
 
-        // Initialize sync worker dependencies
+    /** App lock policy manager. */
+    val appLockManager: AppLockManager by lazy {
+        AppLockManager(this)
+    }
+
+    override fun onCreate() {
+        super.onCreate()
         SyncDependencies.init(sessionRepository)
-
-        // Phase 6 dependencies
-        certificateTrustStore = CertificateTrustStore(this)
-        appLockManager = AppLockManager(this)
     }
 }

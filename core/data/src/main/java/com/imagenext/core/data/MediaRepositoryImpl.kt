@@ -16,7 +16,7 @@ class MediaRepositoryImpl(
     private val mediaDao: MediaDao,
 ) {
 
-    /** Observes all media items ordered by last modified (newest first). */
+    /** Observes all media items ordered by timeline timestamp (newest first). */
     fun getAllMedia(): Flow<List<MediaItem>> {
         return mediaDao.getAllMedia().map { entities ->
             entities.map { it.toDomainModel() }

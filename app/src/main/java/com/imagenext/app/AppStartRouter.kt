@@ -1,6 +1,6 @@
 package com.imagenext.app
 
-import com.imagenext.core.data.FolderRepositoryImpl
+import com.imagenext.core.database.dao.FolderDao
 import com.imagenext.core.security.SessionRepository
 
 /**
@@ -12,7 +12,7 @@ import com.imagenext.core.security.SessionRepository
  */
 class AppStartRouter(
     private val sessionRepository: SessionRepository,
-    private val folderRepository: FolderRepositoryImpl? = null,
+    private val folderDao: FolderDao? = null,
 ) {
 
     /** App route destinations. */
@@ -36,7 +36,7 @@ class AppStartRouter(
         }
 
         // Check if folders have been selected
-        val folderCount = folderRepository?.getSelectedCount() ?: 0
+        val folderCount = folderDao?.getSelectedCount() ?: 0
         return if (folderCount > 0) {
             StartDestination.MAIN
         } else {
