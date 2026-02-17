@@ -11,6 +11,7 @@ package com.imagenext.core.model
  * @property mimeType MIME type of the media (e.g., "image/jpeg").
  * @property size File size in bytes.
  * @property lastModified Last modification timestamp (epoch millis).
+ * @property captureTimestamp Best-effort capture timestamp (epoch millis), if available.
  * @property etag Server-provided ETag for change detection.
  * @property thumbnailPath Local filesystem path to the cached thumbnail, or null if not yet fetched.
  * @property folderPath The parent folder's remote path this item belongs to.
@@ -21,6 +22,7 @@ data class MediaItem(
     val mimeType: String,
     val size: Long,
     val lastModified: Long,
+    val captureTimestamp: Long? = null,
     val etag: String,
     val thumbnailPath: String? = null,
     val folderPath: String,

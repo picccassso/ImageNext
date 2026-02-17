@@ -14,6 +14,7 @@ class TimelineUiModelTest {
     private fun mediaItem(
         remotePath: String,
         lastModified: Long,
+        captureTimestamp: Long? = null,
         fileName: String = "photo.jpg",
     ) = MediaItem(
         remotePath = remotePath,
@@ -21,6 +22,7 @@ class TimelineUiModelTest {
         mimeType = "image/jpeg",
         size = 1024,
         lastModified = lastModified,
+        captureTimestamp = captureTimestamp,
         etag = "etag",
         folderPath = "/photos",
     )
@@ -126,5 +128,22 @@ class TimelineUiModelTest {
         assertEquals(4, timeline.size) // "Today" header + photo + "Other" header + photo
         assertEquals("Today", (timeline[0] as TimelineItem.Header).label)
         assertEquals("Other", (timeline[2] as TimelineItem.Header).label)
+    }
+
+    @Test
+    fun `captureTimestamp takes precedence over lastModified for grouping`() {
+        val oldDate = LocalDate.of(2023, 5, 1)
+        val today = LocalDate.now(zone)
+        val items = listOf(
+            mediaItem(
+                remotePath = "/a.jpg",
+                lastModified = epochMillisForDate(today),
+                captureTimestamp = epochMillisForDate(oldDate),
+            ),
+        )
+
+        val timeline = items.toTimelineItems()
+        val header = timeline[0] as TimelineItem.Header
+        assertTrue(header.label.contains("2023"))
     }
 }

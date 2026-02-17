@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.imagenext.core.database.dao.FolderDao
 import com.imagenext.core.database.dao.MediaDao
 import com.imagenext.core.database.entity.MediaItemEntity
@@ -14,7 +16,7 @@ import com.imagenext.core.database.entity.SyncCheckpointEntity
  * Room database root for ImageNext.
  *
  * Contains entities for media metadata, folder selections, and sync checkpoints.
- * Version 1 — initial schema, no migrations needed yet.
+ * Version 2 — adds capture date and thumbnail lifecycle fields.
  *
  * Migration policy: future schema changes should use Room's migration API
  * to preserve user data across app updates.
@@ -25,7 +27,7 @@ import com.imagenext.core.database.entity.SyncCheckpointEntity
         SelectedFolderEntity::class,
         SyncCheckpointEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -49,7 +51,29 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     DATABASE_NAME,
-                ).build().also { INSTANCE = it }
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
+                    .also { INSTANCE = it }
+            }
+        }
+
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE media_items ADD COLUMN captureTimestamp INTEGER")
+                database.execSQL(
+                    "ALTER TABLE media_items ADD COLUMN thumbnailStatus TEXT NOT NULL DEFAULT 'PENDING'"
+                )
+                database.execSQL(
+                    "ALTER TABLE media_items ADD COLUMN thumbnailRetryCount INTEGER NOT NULL DEFAULT 0"
+                )
+                database.execSQL("ALTER TABLE media_items ADD COLUMN thumbnailLastError TEXT")
+                database.execSQL(
+                    "UPDATE media_items " +
+                        "SET thumbnailStatus = CASE " +
+                        "WHEN thumbnailPath IS NOT NULL AND thumbnailPath != '' THEN 'READY' " +
+                        "ELSE 'PENDING' END"
+                )
             }
         }
     }

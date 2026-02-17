@@ -42,6 +42,7 @@ class MediaRepositoryImpl(
             mimeType = mimeType,
             size = size,
             lastModified = lastModified,
+            captureTimestamp = captureTimestamp,
             etag = etag,
             thumbnailPath = thumbnailPath,
             folderPath = folderPath,

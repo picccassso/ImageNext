@@ -25,6 +25,7 @@ rootProject.name = "ImageNext"
 include(":app")
 
 // Core modules
+include(":core:designsystem")
 include(":core:model")
 include(":core:common")
 include(":core:network")
@@ -40,3 +41,6 @@ include(":feature:photos")
 include(":feature:albums")
 include(":feature:settings")
 include(":feature:viewer")
+
+// Benchmark module
+include(":benchmark")

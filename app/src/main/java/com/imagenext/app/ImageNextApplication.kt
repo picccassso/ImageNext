@@ -4,15 +4,18 @@ import android.app.Application
 import com.imagenext.core.data.FolderRepositoryImpl
 import com.imagenext.core.data.MediaRepositoryImpl
 import com.imagenext.core.data.TimelineRepository
+import com.imagenext.core.data.ViewerRepository
 import com.imagenext.core.database.AppDatabase
 import com.imagenext.core.database.dao.FolderDao
 import com.imagenext.core.database.dao.MediaDao
 import com.imagenext.core.network.auth.LoginFlowClient
 import com.imagenext.core.network.auth.NextcloudAuthApi
 import com.imagenext.core.network.webdav.WebDavClient
+import com.imagenext.core.security.CertificateTrustStore
 import com.imagenext.core.security.CredentialVault
 import com.imagenext.core.security.SessionRepository
 import com.imagenext.core.security.SessionRepositoryImpl
+import com.imagenext.core.security.AppLockManager
 import com.imagenext.core.sync.SyncDependencies
 import com.imagenext.core.sync.SyncOrchestrator
 
@@ -76,6 +79,18 @@ class ImageNextApplication : Application() {
     lateinit var timelineRepository: TimelineRepository
         private set
 
+    /** Viewer repository for fullscreen viewer data access. */
+    lateinit var viewerRepository: ViewerRepository
+        private set
+
+    /** Certificate trust store for self-signed server support. */
+    lateinit var certificateTrustStore: CertificateTrustStore
+        private set
+
+    /** App lock policy manager. */
+    lateinit var appLockManager: AppLockManager
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -93,6 +108,10 @@ class ImageNextApplication : Application() {
         folderRepository = FolderRepositoryImpl(webDavClient, folderDao)
         mediaRepository = MediaRepositoryImpl(mediaDao)
         timelineRepository = TimelineRepository(mediaDao)
+        viewerRepository = ViewerRepository(
+            mediaDao = mediaDao,
+            sessionRepository = sessionRepository,
+        )
         syncOrchestrator = SyncOrchestrator(this)
 
         // Router needs both session and folder repository
@@ -100,5 +119,9 @@ class ImageNextApplication : Application() {
 
         // Initialize sync worker dependencies
         SyncDependencies.init(sessionRepository)
+
+        // Phase 6 dependencies
+        certificateTrustStore = CertificateTrustStore(this)
+        appLockManager = AppLockManager(this)
     }
 }

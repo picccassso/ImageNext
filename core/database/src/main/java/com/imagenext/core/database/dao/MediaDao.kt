@@ -6,6 +6,9 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.imagenext.core.database.entity.MediaItemEntity
+import com.imagenext.core.database.entity.THUMBNAIL_STATUS_FAILED
+import com.imagenext.core.database.entity.THUMBNAIL_STATUS_PENDING
+import com.imagenext.core.database.entity.THUMBNAIL_STATUS_READY
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -17,12 +20,16 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface MediaDao {
 
-    /** Observes all media items ordered by last modified (newest first). */
-    @Query("SELECT * FROM media_items ORDER BY lastModified DESC")
+    /** Observes all media items ordered by timeline date (newest first). */
+    @Query("SELECT * FROM media_items ORDER BY COALESCE(captureTimestamp, lastModified) DESC")
     fun getAllMedia(): Flow<List<MediaItemEntity>>
 
     /** Observes media items for a specific folder. */
-    @Query("SELECT * FROM media_items WHERE folderPath = :folderPath ORDER BY lastModified DESC")
+    @Query(
+        "SELECT * FROM media_items " +
+            "WHERE folderPath = :folderPath " +
+            "ORDER BY COALESCE(captureTimestamp, lastModified) DESC"
+    )
     fun getMediaByFolder(folderPath: String): Flow<List<MediaItemEntity>>
 
     /** Inserts or updates media items (upsert by remotePath PK). */
@@ -37,15 +44,122 @@ interface MediaDao {
     @Query("SELECT COUNT(*) FROM media_items")
     suspend fun getCount(): Int
 
-    /** Returns media items that have no cached thumbnail. */
-    @Query("SELECT * FROM media_items WHERE thumbnailPath IS NULL LIMIT :limit")
-    suspend fun getItemsWithoutThumbnail(limit: Int): List<MediaItemEntity>
+    /** Returns media items that still need thumbnail generation. */
+    @Query(
+        "SELECT * FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_PENDING' " +
+            "OR (thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' AND thumbnailRetryCount < :maxRetryCount) " +
+            "ORDER BY CASE thumbnailStatus " +
+            "WHEN '$THUMBNAIL_STATUS_PENDING' THEN 0 ELSE 1 END, " +
+            "COALESCE(captureTimestamp, lastModified) DESC " +
+            "LIMIT :limit"
+    )
+    suspend fun getItemsNeedingThumbnail(limit: Int, maxRetryCount: Int): List<MediaItemEntity>
 
-    /** Updates the thumbnail path for a specific media item. */
-    @Query("UPDATE media_items SET thumbnailPath = :thumbnailPath WHERE remotePath = :remotePath")
-    suspend fun updateThumbnailPath(remotePath: String, thumbnailPath: String)
+    /** Marks a thumbnail as successfully cached. */
+    @Query(
+        "UPDATE media_items " +
+            "SET thumbnailPath = :thumbnailPath, " +
+            "thumbnailStatus = '$THUMBNAIL_STATUS_READY', " +
+            "thumbnailRetryCount = 0, " +
+            "thumbnailLastError = NULL " +
+            "WHERE remotePath = :remotePath"
+    )
+    suspend fun markThumbnailReady(remotePath: String, thumbnailPath: String)
 
-    /** Paged timeline query ordered by last modified (newest first). */
-    @Query("SELECT * FROM media_items ORDER BY lastModified DESC")
+    /** Marks a thumbnail fetch as failed and increments retry count. */
+    @Query(
+        "UPDATE media_items " +
+            "SET thumbnailStatus = '$THUMBNAIL_STATUS_FAILED', " +
+            "thumbnailRetryCount = thumbnailRetryCount + 1, " +
+            "thumbnailLastError = :errorCode " +
+            "WHERE remotePath = :remotePath"
+    )
+    suspend fun markThumbnailFailed(remotePath: String, errorCode: String)
+
+    /** Resets thumbnail state to pending when metadata changes invalidate cache. */
+    @Query(
+        "UPDATE media_items " +
+            "SET thumbnailPath = NULL, " +
+            "thumbnailStatus = '$THUMBNAIL_STATUS_PENDING', " +
+            "thumbnailRetryCount = 0, " +
+            "thumbnailLastError = NULL " +
+            "WHERE remotePath = :remotePath"
+    )
+    suspend fun resetThumbnailState(remotePath: String)
+
+    /** Count of retryable thumbnail backlog items. */
+    @Query(
+        "SELECT COUNT(*) FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_PENDING' " +
+            "OR (thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' AND thumbnailRetryCount < :maxRetryCount)"
+    )
+    suspend fun getPendingThumbnailCount(maxRetryCount: Int): Int
+
+    /** Count of permanently failed thumbnail items after retry budget is exhausted. */
+    @Query(
+        "SELECT COUNT(*) FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' AND thumbnailRetryCount >= :maxRetryCount"
+    )
+    suspend fun getExhaustedThumbnailFailureCount(maxRetryCount: Int): Int
+
+    /** Most common error code among exhausted thumbnail failures. */
+    @Query(
+        "SELECT thumbnailLastError FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' " +
+            "AND thumbnailRetryCount >= :maxRetryCount " +
+            "AND thumbnailLastError IS NOT NULL " +
+            "GROUP BY thumbnailLastError " +
+            "ORDER BY COUNT(*) DESC " +
+            "LIMIT 1"
+    )
+    suspend fun getDominantExhaustedThumbnailError(maxRetryCount: Int): String?
+
+    /** Number of exhausted failures for a specific error code. */
+    @Query(
+        "SELECT COUNT(*) FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' " +
+            "AND thumbnailRetryCount >= :maxRetryCount " +
+            "AND thumbnailLastError = :errorCode"
+    )
+    suspend fun getExhaustedThumbnailFailureCountByError(maxRetryCount: Int, errorCode: String): Int
+
+    /** Re-queues exhausted thumbnail failures for another backfill pass. */
+    @Query(
+        "UPDATE media_items " +
+            "SET thumbnailStatus = '$THUMBNAIL_STATUS_PENDING', " +
+            "thumbnailRetryCount = 0, " +
+            "thumbnailLastError = NULL " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' " +
+            "AND thumbnailRetryCount >= :maxRetryCount"
+    )
+    suspend fun requeueExhaustedThumbnailFailures(maxRetryCount: Int): Int
+
+    /** Re-queues exhausted failures for a specific error category. */
+    @Query(
+        "UPDATE media_items " +
+            "SET thumbnailStatus = '$THUMBNAIL_STATUS_PENDING', " +
+            "thumbnailRetryCount = 0, " +
+            "thumbnailLastError = NULL " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' " +
+            "AND thumbnailRetryCount >= :maxRetryCount " +
+            "AND thumbnailLastError = :errorCode"
+    )
+    suspend fun requeueExhaustedThumbnailFailuresByError(maxRetryCount: Int, errorCode: String): Int
+
+    /** Paged timeline query ordered by timeline date (newest first). */
+    @Query("SELECT * FROM media_items ORDER BY COALESCE(captureTimestamp, lastModified) DESC")
     fun getTimelinePaged(): PagingSource<Int, MediaItemEntity>
+
+    /** Returns a single media item by its remote path. */
+    @Query("SELECT * FROM media_items WHERE remotePath = :remotePath LIMIT 1")
+    suspend fun getByRemotePath(remotePath: String): MediaItemEntity?
+
+    /** Returns all media items ordered by timeline date descending (for viewer index lookup). */
+    @Query("SELECT * FROM media_items ORDER BY COALESCE(captureTimestamp, lastModified) DESC")
+    suspend fun getAllMediaList(): List<MediaItemEntity>
+
+    /** Returns all matching media items for bulk merge logic. */
+    @Query("SELECT * FROM media_items WHERE remotePath IN (:remotePaths)")
+    suspend fun getByRemotePaths(remotePaths: List<String>): List<MediaItemEntity>
 }

@@ -22,43 +22,54 @@ sealed interface TimelineItem {
     data class Photo(val mediaItem: MediaItem) : TimelineItem
 }
 
+data class TimelineDateContext(
+    val zone: ZoneId = ZoneId.systemDefault(),
+    val today: LocalDate = LocalDate.now(zone),
+    val yesterday: LocalDate = today.minusDays(1),
+    val dateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.getDefault()),
+)
+
+fun MediaItem.resolveTimelineDate(context: TimelineDateContext): LocalDate? {
+    val timelineTimestamp = captureTimestamp ?: lastModified
+    if (timelineTimestamp <= 0) return null
+    return Instant.ofEpochMilli(timelineTimestamp)
+        .atZone(context.zone)
+        .toLocalDate()
+}
+
+fun timelineGroupKey(date: LocalDate?): LocalDate = date ?: LocalDate.MIN
+
+fun formatTimelineHeaderLabel(date: LocalDate?, context: TimelineDateContext): String {
+    return when {
+        date == null -> "Other"
+        date == context.today -> "Today"
+        date == context.yesterday -> "Yesterday"
+        else -> date.format(context.dateFormatter)
+    }
+}
+
 /**
  * Groups a flat list of [MediaItem]s into date-bucketed [TimelineItem]s.
  *
- * Items are expected to arrive pre-sorted by lastModified DESC.
+ * Items are expected to arrive pre-sorted by timeline timestamp DESC
+ * (`captureTimestamp ?: lastModified`).
  * Grouping uses the device's default timezone.
  */
 fun List<MediaItem>.toTimelineItems(): List<TimelineItem> {
     if (isEmpty()) return emptyList()
 
-    val zone = ZoneId.systemDefault()
-    val today = LocalDate.now(zone)
-    val yesterday = today.minusDays(1)
-    val dateFormatter = DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.getDefault())
+    val dateContext = TimelineDateContext()
 
     val result = mutableListOf<TimelineItem>()
     var currentDateKey: LocalDate? = null // null means no header emitted yet
 
     for (item in this) {
-        val itemDate = if (item.lastModified > 0) {
-            Instant.ofEpochMilli(item.lastModified)
-                .atZone(zone)
-                .toLocalDate()
-        } else {
-            null
-        }
-
-        // Determine the grouping key — null lastModified groups under a special bucket
-        val groupKey = itemDate ?: LocalDate.MIN
+        val itemDate = item.resolveTimelineDate(dateContext)
+        val groupKey = timelineGroupKey(itemDate)
 
         if (groupKey != currentDateKey) {
             currentDateKey = groupKey
-            val label = when {
-                itemDate == null -> "Other"
-                itemDate == today -> "Today"
-                itemDate == yesterday -> "Yesterday"
-                else -> itemDate.format(dateFormatter)
-            }
+            val label = formatTimelineHeaderLabel(itemDate, dateContext)
             result.add(TimelineItem.Header(label = label, date = itemDate))
         }
 

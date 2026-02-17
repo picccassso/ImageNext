@@ -2,12 +2,31 @@
 <!--
     Data extraction rules for Android 12+ (API 31+).
     Security policy: no sensitive data should be included in backups or device transfers.
+    Aligns with MASTERPLAN §8: sensitive backups disabled.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- Exclude all files from cloud backup -->
+        <!-- Exclude shared preferences (may contain session references) -->
+        <exclude domain="sharedpref" path="." />
+        <!-- Exclude databases (local media metadata and sync state) -->
+        <exclude domain="database" path="." />
+        <!-- Exclude internal files (thumbnails, cache, credentials) -->
+        <exclude domain="file" path="." />
+        <!-- Exclude external files -->
+        <exclude domain="external" path="." />
+        <!-- Exclude root/no-backup files -->
+        <exclude domain="root" path="." />
     </cloud-backup>
     <device-transfer>
-        <!-- Exclude all files from device transfer -->
+        <!-- Exclude shared preferences -->
+        <exclude domain="sharedpref" path="." />
+        <!-- Exclude databases -->
+        <exclude domain="database" path="." />
+        <!-- Exclude internal files -->
+        <exclude domain="file" path="." />
+        <!-- Exclude external files -->
+        <exclude domain="external" path="." />
+        <!-- Exclude root/no-backup files -->
+        <exclude domain="root" path="." />
     </device-transfer>
 </data-extraction-rules>

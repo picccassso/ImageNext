@@ -2,6 +2,7 @@ package com.imagenext.core.network.webdav
 
 import com.imagenext.core.model.SelectedFolder
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -181,6 +182,29 @@ class WebDavClientTest {
 
         val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
         assertTrue(items.isEmpty())
+    }
+
+    @Test
+    fun `parseMediaItems extracts capture timestamp from camera style filename`() {
+        val xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <d:multistatus xmlns:d="DAV:">
+                <d:response>
+                    <d:href>/remote.php/dav/files/testuser/Photos/20260114_123626_sample.jpg</d:href>
+                    <d:propstat>
+                        <d:prop>
+                            <d:resourcetype/>
+                            <d:getcontenttype>image/jpeg</d:getcontenttype>
+                            <d:getcontentlength>2048</d:getcontentlength>
+                        </d:prop>
+                    </d:propstat>
+                </d:response>
+            </d:multistatus>
+        """.trimIndent()
+
+        val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
+        assertEquals(1, items.size)
+        assertNotNull(items[0].captureTimestamp)
     }
 
     // --- Safety limits ---

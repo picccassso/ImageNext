@@ -13,6 +13,12 @@ import java.io.IOException
 import java.io.StringReader
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 
@@ -323,6 +329,7 @@ class WebDavClient(
                             val remotePath = extractRemotePath(href!!, loginName)
                             val fileName = remotePath.substringAfterLast('/')
                             val timestamp = parseHttpDate(lastModified)
+                            val captureTimestamp = parseCaptureTimestampFromFileName(fileName)
 
                             items.add(
                                 MediaItem(
@@ -331,6 +338,7 @@ class WebDavClient(
                                     mimeType = contentType.orEmpty(),
                                     size = contentLength,
                                     lastModified = timestamp,
+                                    captureTimestamp = captureTimestamp,
                                     etag = etag.orEmpty().trim('"'),
                                     folderPath = folderPath,
                                 )
@@ -380,6 +388,40 @@ class WebDavClient(
         }
     }
 
+    /**
+     * Best-effort capture timestamp parsing from common camera filename patterns.
+     * Returns null when filename does not contain a recognizable date token.
+     */
+    private fun parseCaptureTimestampFromFileName(fileName: String): Long? {
+        val normalized = fileName.substringBeforeLast('.')
+
+        val dateTimeToken = DATE_TIME_TOKEN_REGEX.find(normalized)?.groupValues?.get(1)
+        if (dateTimeToken != null) {
+            for (formatter in dateTimeFormatters) {
+                try {
+                    val dateTime = LocalDateTime.parse(dateTimeToken, formatter)
+                    return dateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                } catch (_: DateTimeParseException) {
+                    // Try next formatter.
+                }
+            }
+        }
+
+        val dateToken = DATE_TOKEN_REGEX.find(normalized)?.groupValues?.get(1)
+        if (dateToken != null) {
+            for (formatter in dateOnlyFormatters) {
+                try {
+                    val date = LocalDate.parse(dateToken, formatter)
+                    return date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                } catch (_: DateTimeParseException) {
+                    // Try next formatter.
+                }
+            }
+        }
+
+        return null
+    }
+
     companion object {
         /** Maximum folder depth for recursive discovery. */
         const val MAX_FOLDER_DEPTH = 3
@@ -389,5 +431,20 @@ class WebDavClient(
 
         /** Maximum XML response size to parse (2 MB). */
         const val MAX_RESPONSE_SIZE = 2 * 1024 * 1024
+
+        private val DATE_TIME_TOKEN_REGEX = Regex("(\\d{8}_\\d{6}|\\d{4}-\\d{2}-\\d{2}[ _-]\\d{2}[-:]\\d{2}[-:]\\d{2})")
+        private val DATE_TOKEN_REGEX = Regex("(\\d{8}|\\d{4}-\\d{2}-\\d{2})")
+
+        private val dateTimeFormatters = listOf(
+            DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.US),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss", Locale.US),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.US),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss", Locale.US),
+        )
+
+        private val dateOnlyFormatters = listOf(
+            DateTimeFormatter.ofPattern("yyyyMMdd", Locale.US),
+            DateTimeFormatter.ISO_LOCAL_DATE,
+        )
     }
 }

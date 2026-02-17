@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup rules for Android 11 and below (fullBackupContent).
+    Security policy: exclude all sensitive data from cloud backups.
+    Aligns with MASTERPLAN §8: sensitive backups disabled.
+-->
+<full-backup-content>
+    <!-- Exclude shared preferences (may contain session references) -->
+    <exclude domain="sharedpref" path="." />
+    <!-- Exclude databases (local media metadata and sync state) -->
+    <exclude domain="database" path="." />
+    <!-- Exclude internal files (thumbnails, cache, credentials) -->
+    <exclude domain="file" path="." />
+    <!-- Exclude external files -->
+    <exclude domain="external" path="." />
+    <!-- Exclude root/no-backup files -->
+    <exclude domain="root" path="." />
+</full-backup-content>

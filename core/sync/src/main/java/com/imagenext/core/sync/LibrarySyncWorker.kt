@@ -1,12 +1,16 @@
 package com.imagenext.core.sync
 
 import android.content.Context
+import android.os.SystemClock
+import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.imagenext.core.database.AppDatabase
 import com.imagenext.core.database.entity.MediaItemEntity
 import com.imagenext.core.database.entity.SyncCheckpointEntity
+import com.imagenext.core.database.entity.THUMBNAIL_STATUS_PENDING
+import com.imagenext.core.database.entity.THUMBNAIL_STATUS_READY
 import com.imagenext.core.model.SyncState
 import com.imagenext.core.network.webdav.WebDavClient
 import com.imagenext.core.security.SessionRepository
@@ -26,6 +30,7 @@ class LibrarySyncWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
+        val workerStartMs = SystemClock.elapsedRealtime()
         val database = AppDatabase.getInstance(applicationContext)
         val folderDao = database.folderDao()
         val mediaDao = database.mediaDao()
@@ -40,8 +45,11 @@ class LibrarySyncWorker(
         val selectedFolders = folderDao.getSelectedFoldersList()
 
         if (selectedFolders.isEmpty()) {
+            logPerf("library_sync_no_folders durationMs=${elapsedSince(workerStartMs)}")
             return Result.success(workDataOf(KEY_SYNCED_COUNT to 0))
         }
+
+        logPerf("library_sync_start folders=${selectedFolders.size}")
 
         var totalSynced = 0
         var failedFolders = 0
@@ -63,31 +71,60 @@ class LibrarySyncWorker(
             val checkpoint = folderDao.getCheckpoint(folder.remotePath)
 
             // Fetch media files from WebDAV
+            val listStartMs = SystemClock.elapsedRealtime()
             val result = webDavClient.listMediaFiles(
                 serverUrl = session.serverUrl,
                 loginName = session.loginName,
                 appPassword = session.appPassword,
                 folderPath = folder.remotePath,
             )
+            val listDurationMs = elapsedSince(listStartMs)
 
             when (result) {
                 is WebDavClient.WebDavResult.Success -> {
+                    val upsertStartMs = SystemClock.elapsedRealtime()
+                    val existingByPath = mediaDao
+                        .getByRemotePaths(result.data.map { it.remotePath })
+                        .associateBy { it.remotePath }
+
                     val entities = result.data.map { item ->
+                        val existing = existingByPath[item.remotePath]
+                        val metadataUnchanged = existing != null &&
+                            existing.etag == item.etag &&
+                            existing.size == item.size &&
+                            existing.lastModified == item.lastModified
+                        val preserveThumbnail = metadataUnchanged && !existing.thumbnailPath.isNullOrBlank()
+
                         MediaItemEntity(
                             remotePath = item.remotePath,
                             fileName = item.fileName,
                             mimeType = item.mimeType,
                             size = item.size,
                             lastModified = item.lastModified,
+                            captureTimestamp = item.captureTimestamp ?: existing?.captureTimestamp,
                             etag = item.etag,
                             folderPath = item.folderPath,
-                            // Preserve existing thumbnail if item already exists
-                            thumbnailPath = null,
+                            thumbnailPath = if (preserveThumbnail) existing.thumbnailPath else null,
+                            thumbnailStatus = if (preserveThumbnail) {
+                                THUMBNAIL_STATUS_READY
+                            } else {
+                                THUMBNAIL_STATUS_PENDING
+                            },
+                            thumbnailRetryCount = 0,
+                            thumbnailLastError = null,
                         )
                     }
 
                     mediaDao.upsertAll(entities)
                     totalSynced += entities.size
+                    val upsertDurationMs = elapsedSince(upsertStartMs)
+                    logPerf(
+                        "library_sync_folder_success " +
+                            "index=${index + 1}/${selectedFolders.size} " +
+                            "items=${entities.size} " +
+                            "listMs=$listDurationMs " +
+                            "upsertMs=$upsertDurationMs"
+                    )
 
                     // Update checkpoint
                     folderDao.upsertCheckpoint(
@@ -101,6 +138,11 @@ class LibrarySyncWorker(
                 }
                 is WebDavClient.WebDavResult.Error -> {
                     failedFolders++
+                    logPerf(
+                        "library_sync_folder_error " +
+                            "index=${index + 1}/${selectedFolders.size} " +
+                            "listMs=$listDurationMs"
+                    )
                     // Update checkpoint as failed
                     folderDao.upsertCheckpoint(
                         SyncCheckpointEntity(
@@ -114,7 +156,8 @@ class LibrarySyncWorker(
             }
         }
 
-        return if (failedFolders > 0 && failedFolders < selectedFolders.size) {
+        val totalDurationMs = elapsedSince(workerStartMs)
+        val result = if (failedFolders > 0 && failedFolders < selectedFolders.size) {
             // Partial success — some folders failed
             Result.success(
                 workDataOf(
@@ -132,6 +175,21 @@ class LibrarySyncWorker(
                 )
             )
         }
+
+        logPerf(
+            "library_sync_finish " +
+                "status=${result.javaClass.simpleName} " +
+                "synced=$totalSynced " +
+                "failedFolders=$failedFolders " +
+                "durationMs=$totalDurationMs"
+        )
+        return result
+    }
+
+    private fun elapsedSince(startMs: Long): Long = SystemClock.elapsedRealtime() - startMs
+
+    private fun logPerf(message: String) {
+        Log.d(PERF_TAG, message)
     }
 
     companion object {
@@ -142,5 +200,7 @@ class LibrarySyncWorker(
         const val KEY_PROGRESS_CURRENT = "progress_current"
         const val KEY_PROGRESS_TOTAL = "progress_total"
         const val KEY_CURRENT_FOLDER = "current_folder"
+
+        private const val PERF_TAG = "ImageNextPerf"
     }
 }

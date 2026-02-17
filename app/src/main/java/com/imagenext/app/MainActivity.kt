@@ -4,12 +4,23 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,6 +31,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
@@ -38,7 +51,6 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ImageNextTheme {
-                // Resolve start destination asynchronously (folder count needs DB access)
                 var startDestination by remember { mutableStateOf<String?>(null) }
 
                 LaunchedEffect(Unit) {
@@ -55,11 +67,12 @@ class MainActivity : ComponentActivity() {
                         app = app,
                     )
                 } else {
-                    // Brief loading while resolving start destination
                     Box(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background),
                         contentAlignment = Alignment.Center,
-                    ) { /* Empty — splash screen covers this momentarily */ }
+                    ) { /* Splash screen covers this */ }
                 }
             }
         }
@@ -75,8 +88,6 @@ fun ImageNextApp(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
-    // Create OnboardingViewModel via ViewModelProvider so it survives activity
-    // recreation (critical for Login Flow v2 browser handoff).
     val onboardingViewModelFactory = remember {
         OnboardingViewModelFactory(
             authApi = app.authApi,
@@ -85,43 +96,69 @@ fun ImageNextApp(
         )
     }
 
-    // Determine if we should show the bottom nav bar.
-    // Hide it during onboarding and folder selection.
     val isOnboarding = currentDestination?.route == NavRoutes.ONBOARDING
     val isFolderSelection = currentDestination?.route == NavRoutes.FOLDER_SELECTION
+    val isViewer = currentDestination?.route == NavRoutes.VIEWER
+    val showBottomBar = !isOnboarding && !isFolderSelection && !isViewer
 
     Scaffold(
         bottomBar = {
-            if (!isOnboarding && !isFolderSelection) {
-                NavigationBar {
-                    BottomNavDestination.entries.forEach { destination ->
-                        val selected = currentDestination?.hierarchy?.any {
-                            it.route == destination.route
-                        } == true
+            AnimatedVisibility(
+                visible = showBottomBar,
+                enter = fadeIn() + slideInVertically { it },
+                exit = fadeOut() + slideOutVertically { it }
+            ) {
+                Column {
+                    HorizontalDivider(
+                        thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f)
+                    )
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                        tonalElevation = 0.dp,
+                    ) {
+                        BottomNavDestination.entries.forEach { destination ->
+                            val selected = currentDestination?.hierarchy?.any {
+                                it.route == destination.route
+                            } == true
 
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = {
-                                navController.navigate(destination.route) {
-                                    popUpTo(navController.graph.startDestinationId) {
-                                        saveState = true
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = {
+                                    navController.navigate(destination.route) {
+                                        popUpTo(navController.graph.startDestinationId) {
+                                            saveState = true
+                                        }
+                                        launchSingleTop = true
+                                        restoreState = true
                                     }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = {
-                                Icon(
-                                    imageVector = destination.icon,
-                                    contentDescription = destination.label,
+                                },
+                                icon = {
+                                    Icon(
+                                        imageVector = destination.icon,
+                                        contentDescription = destination.label,
+                                    )
+                                },
+                                label = { 
+                                    Text(
+                                        text = destination.label,
+                                        style = MaterialTheme.typography.labelSmall
+                                    ) 
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    indicatorColor = Color.Transparent
                                 )
-                            },
-                            label = { Text(text = destination.label) },
-                        )
+                            )
+                        }
                     }
                 }
             }
         },
+        containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
         AppNavHost(
             navController = navController,

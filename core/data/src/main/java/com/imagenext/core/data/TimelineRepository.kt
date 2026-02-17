@@ -43,6 +43,7 @@ class TimelineRepository(
                     mimeType = entity.mimeType,
                     size = entity.size,
                     lastModified = entity.lastModified,
+                    captureTimestamp = entity.captureTimestamp,
                     etag = entity.etag,
                     thumbnailPath = entity.thumbnailPath,
                     folderPath = entity.folderPath,
