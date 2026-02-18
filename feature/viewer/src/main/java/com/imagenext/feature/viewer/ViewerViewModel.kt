@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 class ViewerViewModel(
     private val viewerRepository: ViewerRepository,
     private val initialRemotePath: String,
+    private val albumId: Long? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<ViewerUiState>(ViewerUiState.Loading)
@@ -30,7 +31,7 @@ class ViewerViewModel(
 
     private fun loadViewer() {
         viewModelScope.launch {
-            val allItems = viewerRepository.getAllMediaOrdered()
+            val allItems = viewerRepository.getMediaOrdered(albumId = albumId)
             if (allItems.isEmpty()) {
                 _uiState.value = ViewerUiState.Error("No media items available.")
                 return@launch
@@ -126,12 +127,14 @@ class ViewerViewModel(
 class ViewerViewModelFactory(
     private val viewerRepository: ViewerRepository,
     private val initialRemotePath: String,
+    private val albumId: Long? = null,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return ViewerViewModel(
             viewerRepository = viewerRepository,
             initialRemotePath = initialRemotePath,
+            albumId = albumId,
         ) as T
     }
 }

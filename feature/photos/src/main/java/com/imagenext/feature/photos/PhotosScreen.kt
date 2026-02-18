@@ -10,7 +10,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.ScrollableDefaults
@@ -42,11 +42,17 @@ import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -100,9 +106,13 @@ private const val MAX_FLING_VELOCITY_PX_PER_SECOND = 8500f
 data class MediaOpenRequest(
     val remotePath: String,
     val originBounds: IntRect? = null,
+    val albumId: Long? = null,
 )
 
-@OptIn(androidx.compose.material.ExperimentalMaterialApi::class)
+@OptIn(
+    androidx.compose.material.ExperimentalMaterialApi::class,
+    ExperimentalMaterial3Api::class,
+)
 @Composable
 fun PhotosScreen(
     viewModel: PhotosViewModel,
@@ -122,6 +132,11 @@ fun PhotosScreen(
     }
     val pagingItems = viewModel.timelineItems.collectAsLazyPagingItems()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
+    val albumPickerItems by viewModel.albumPickerItems.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var pendingAlbumTarget by remember { mutableStateOf<MediaItem?>(null) }
+    var createAlbumTarget by remember { mutableStateOf<MediaItem?>(null) }
+    val bottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var hasDisplayedPhotos by rememberSaveable { mutableStateOf(false) }
     val allowRemotePreview by remember(gridState) {
         derivedStateOf { !gridState.isScrollInProgress }
@@ -187,6 +202,12 @@ fun PhotosScreen(
         }
     }
 
+    LaunchedEffect(viewModel) {
+        viewModel.messages.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -216,6 +237,9 @@ fun PhotosScreen(
                         flingBehavior = gridFlingBehavior,
                         allowRemotePreview = allowRemotePreview,
                         onMediaClick = onMediaClick,
+                        onMediaLongClick = { mediaItem ->
+                            pendingAlbumTarget = mediaItem
+                        },
                         remotePreviewAuth = remotePreviewAuth,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -241,6 +265,60 @@ fun PhotosScreen(
                 )
             )
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+    }
+
+    pendingAlbumTarget?.let { mediaItem ->
+        AddToAlbumBottomSheet(
+            albumItems = albumPickerItems,
+            sheetState = bottomSheetState,
+            onDismiss = { pendingAlbumTarget = null },
+            onAddToAlbum = { albumId ->
+                viewModel.addMediaToAlbum(albumId, mediaItem.remotePath)
+                pendingAlbumTarget = null
+            },
+            onCreateAlbum = {
+                createAlbumTarget = mediaItem
+                pendingAlbumTarget = null
+            },
+        )
+    }
+
+    createAlbumTarget?.let { mediaItem ->
+        var albumName by remember(mediaItem.remotePath) { mutableStateOf("") }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { createAlbumTarget = null },
+            title = { Text("Create album") },
+            text = {
+                OutlinedTextField(
+                    value = albumName,
+                    onValueChange = { albumName = it },
+                    label = { Text("Album name") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        createAlbumTarget = null
+                        viewModel.createAlbumAndAdd(albumName, mediaItem.remotePath)
+                    }
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { createAlbumTarget = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }
 
@@ -251,6 +329,7 @@ private fun PhotosGrid(
     flingBehavior: FlingBehavior,
     allowRemotePreview: Boolean,
     onMediaClick: (MediaOpenRequest) -> Unit,
+    onMediaLongClick: (MediaItem) -> Unit,
     remotePreviewAuth: RemotePreviewAuth?,
     modifier: Modifier = Modifier,
 ) {
@@ -302,6 +381,7 @@ private fun PhotosGrid(
                         mediaItem = item.mediaItem,
                         remotePreviewAuth = remotePreviewAuth,
                         allowRemotePreview = allowRemotePreview,
+                        onLongClick = { onMediaLongClick(item.mediaItem) },
                         onClick = { originBounds ->
                             onMediaClick(
                                 MediaOpenRequest(
@@ -338,6 +418,7 @@ private fun ThumbnailCell(
     mediaItem: MediaItem,
     remotePreviewAuth: RemotePreviewAuth?,
     allowRemotePreview: Boolean,
+    onLongClick: () -> Unit,
     onClick: (IntRect?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -371,7 +452,10 @@ private fun ThumbnailCell(
                     bottom = bounds.bottom.roundToInt(),
                 )
             }
-            .clickable { onClick(cellBounds) },
+            .combinedClickable(
+                onClick = { onClick(cellBounds) },
+                onLongClick = onLongClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         if (thumbnailModel != null) {
@@ -397,6 +481,52 @@ private fun ThumbnailCell(
                 tint = Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.size(28.dp),
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddToAlbumBottomSheet(
+    albumItems: List<com.imagenext.core.data.AlbumPickerItem>,
+    sheetState: androidx.compose.material3.SheetState,
+    onDismiss: () -> Unit,
+    onAddToAlbum: (Long) -> Unit,
+    onCreateAlbum: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+        ) {
+            Text(
+                text = "Add to album",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            TextButton(onClick = onCreateAlbum) {
+                Text("Create new album")
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            if (albumItems.isEmpty()) {
+                Text(
+                    text = "No albums yet",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+                )
+            } else {
+                albumItems.forEach { album ->
+                    TextButton(onClick = { onAddToAlbum(album.id) }) {
+                        Text("${album.displayName} (${album.mediaCount})")
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }

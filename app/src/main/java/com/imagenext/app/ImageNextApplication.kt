@@ -1,11 +1,13 @@
 package com.imagenext.app
 
 import android.app.Application
+import com.imagenext.core.data.AlbumRepository
 import com.imagenext.core.data.FolderRepositoryImpl
 import com.imagenext.core.data.MediaRepositoryImpl
 import com.imagenext.core.data.TimelineRepository
 import com.imagenext.core.data.ViewerRepository
 import com.imagenext.core.database.AppDatabase
+import com.imagenext.core.database.dao.AlbumDao
 import com.imagenext.core.database.dao.FolderDao
 import com.imagenext.core.database.dao.MediaDao
 import com.imagenext.core.network.auth.LoginFlowClient
@@ -70,6 +72,11 @@ class ImageNextApplication : Application() {
         database.folderDao()
     }
 
+    /** Album DAO for manual album persistence. */
+    val albumDao: AlbumDao by lazy {
+        database.albumDao()
+    }
+
     /** Media DAO for media metadata queries. */
     val mediaDao: MediaDao by lazy {
         database.mediaDao()
@@ -83,6 +90,14 @@ class ImageNextApplication : Application() {
     /** Media repository for timeline and viewer access. */
     val mediaRepository: MediaRepositoryImpl by lazy {
         MediaRepositoryImpl(mediaDao)
+    }
+
+    /** Manual album repository for albums and album membership operations. */
+    val albumRepository: AlbumRepository by lazy {
+        AlbumRepository(
+            albumDao = albumDao,
+            mediaDao = mediaDao,
+        )
     }
 
     /** Sync orchestrator for background indexing and thumbnail work. */

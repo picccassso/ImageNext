@@ -165,9 +165,13 @@ fun ImageNextApp(
                         tonalElevation = 0.dp,
                     ) {
                         BottomNavDestination.entries.forEach { destination ->
+                            val currentRoute = currentDestination?.route
                             val selected = currentDestination?.hierarchy?.any {
                                 it.route == destination.route
-                            } == true
+                            } == true || (
+                                destination == BottomNavDestination.Albums &&
+                                    currentRoute == NavRoutes.ALBUM_DETAIL
+                                )
 
                             NavigationBarItem(
                                 selected = selected,

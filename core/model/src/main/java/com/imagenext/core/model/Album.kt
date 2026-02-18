@@ -3,17 +3,18 @@ package com.imagenext.core.model
 /**
  * Album domain model.
  *
- * Represents an album of photos, mapped to a Nextcloud folder.
+ * Represents a user-managed local album.
  *
- * @property folderPath The remote path of the folder that represents this album.
+ * @property id Stable local album identifier.
  * @property displayName The name of the album for display.
  * @property mediaCount The number of media items in this album.
  * @property coverThumbnailPath Local path to the thumbnail of the cover image, if available.
+ * @property isSystem Whether this is an auto-managed smart album.
  */
 data class Album(
-    val folderPath: String,
+    val id: Long,
     val displayName: String,
     val mediaCount: Int,
     val coverThumbnailPath: String? = null,
-    val coverRemotePath: String? = null,
+    val isSystem: Boolean = false,
 )

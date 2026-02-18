@@ -230,6 +230,20 @@ class ViewerViewModelTest {
         assertEquals(2, state.prefetchImageSources.size)
         assertTrue(state.prefetchImageSources.all { it.remotePath.endsWith(".jpg") })
     }
+
+    @Test
+    fun `uses album scoped query when album id is provided`() = runTest {
+        val repo = FakeViewerRepository(listOf(mediaItem("/a.jpg")))
+        ViewerViewModel(
+            viewerRepository = repo,
+            initialRemotePath = "/a.jpg",
+            albumId = 42L,
+        )
+
+        advanceUntilIdle()
+
+        assertEquals(42L, repo.lastRequestedAlbumId)
+    }
 }
 
 /**
@@ -240,11 +254,18 @@ private class FakeViewerRepository(
     private val items: List<MediaItem>,
 ) : ViewerRepository(StubMediaDao()) {
 
+    var lastRequestedAlbumId: Long? = null
+
     override suspend fun getMediaByPath(remotePath: String): MediaItem? {
         return items.find { it.remotePath == remotePath }
     }
 
     override suspend fun getAllMediaOrdered(): List<MediaItem> {
+        return items
+    }
+
+    override suspend fun getMediaOrdered(albumId: Long?): List<MediaItem> {
+        lastRequestedAlbumId = albumId
         return items
     }
 

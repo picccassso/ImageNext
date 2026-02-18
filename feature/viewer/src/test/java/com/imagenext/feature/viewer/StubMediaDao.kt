@@ -36,7 +36,19 @@ class StubMediaDao : MediaDao {
     override fun getTimelinePaged(): PagingSource<Int, MediaItemEntity> {
         throw UnsupportedOperationException("Stub")
     }
+    override fun getPhotosPaged(): PagingSource<Int, MediaItemEntity> {
+        throw UnsupportedOperationException("Stub")
+    }
+    override fun getVideosPaged(): PagingSource<Int, MediaItemEntity> {
+        throw UnsupportedOperationException("Stub")
+    }
+    override fun getAlbumMediaPaged(albumId: Long): PagingSource<Int, MediaItemEntity> {
+        throw UnsupportedOperationException("Stub")
+    }
     override suspend fun getByRemotePath(remotePath: String): MediaItemEntity? = null
     override suspend fun getAllMediaList(): List<MediaItemEntity> = emptyList()
+    override suspend fun getPhotosList(): List<MediaItemEntity> = emptyList()
+    override suspend fun getVideosList(): List<MediaItemEntity> = emptyList()
+    override suspend fun getAlbumMediaList(albumId: Long): List<MediaItemEntity> = emptyList()
     override suspend fun getByRemotePaths(remotePaths: List<String>): List<MediaItemEntity> = emptyList()
 }

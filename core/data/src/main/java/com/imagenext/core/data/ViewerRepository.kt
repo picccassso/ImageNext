@@ -65,6 +65,28 @@ open class ViewerRepository(
         }
     }
 
+    /** Returns media items ordered for a specific album or globally when [albumId] is null. */
+    open suspend fun getMediaOrdered(albumId: Long?): List<MediaItem> {
+        val entities = if (albumId == null) {
+            mediaDao.getAllMediaList()
+        } else {
+            mediaDao.getAlbumMediaList(albumId)
+        }
+        return entities.map {
+            MediaItem(
+                remotePath = it.remotePath,
+                fileName = it.fileName,
+                mimeType = it.mimeType,
+                size = it.size,
+                lastModified = it.lastModified,
+                captureTimestamp = it.captureTimestamp,
+                etag = it.etag,
+                thumbnailPath = it.thumbnailPath,
+                folderPath = it.folderPath,
+            )
+        }
+    }
+
     /** Returns an authenticated remote source for a media path, or null if no active session. */
     open fun getRemoteMediaSource(remotePath: String): RemoteMediaSource? {
         val session = sessionRepository?.getSession() ?: return null

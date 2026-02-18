@@ -20,6 +20,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.imagenext.app.ImageNextApplication
 import com.imagenext.designsystem.Motion
+import com.imagenext.feature.albums.AlbumDetailScreen
+import com.imagenext.feature.albums.AlbumDetailViewModel
+import com.imagenext.feature.albums.AlbumDetailViewModelFactory
 import com.imagenext.feature.albums.AlbumsScreen
 import com.imagenext.feature.albums.AlbumsViewModel
 import com.imagenext.feature.albums.AlbumsViewModelFactory
@@ -48,14 +51,20 @@ object NavRoutes {
     const val FOLDER_SELECTION = "folder_selection"
     const val PHOTOS = "photos"
     const val ALBUMS = "albums"
+    const val ALBUM_DETAIL = "album_detail/{albumId}"
     const val SETTINGS = "settings"
+    const val ALBUM_ID = "albumId"
     private const val ORIGIN_LEFT = "originLeft"
     private const val ORIGIN_TOP = "originTop"
     private const val ORIGIN_WIDTH = "originWidth"
     private const val ORIGIN_HEIGHT = "originHeight"
     const val VIEWER =
         "viewer/{remotePath}?$ORIGIN_LEFT={$ORIGIN_LEFT}&$ORIGIN_TOP={$ORIGIN_TOP}" +
-            "&$ORIGIN_WIDTH={$ORIGIN_WIDTH}&$ORIGIN_HEIGHT={$ORIGIN_HEIGHT}"
+            "&$ORIGIN_WIDTH={$ORIGIN_WIDTH}&$ORIGIN_HEIGHT={$ORIGIN_HEIGHT}" +
+            "&$ALBUM_ID={$ALBUM_ID}"
+
+    /** Builds album detail route for a specific album id. */
+    fun albumDetailRoute(albumId: Long): String = "album_detail/$albumId"
 
     /** Builds a viewer route for a specific media item. */
     fun viewerRoute(request: MediaOpenRequest): String {
@@ -65,7 +74,8 @@ object NavRoutes {
         val top = origin?.top ?: -1
         val width = origin?.width ?: -1
         val height = origin?.height ?: -1
-        return "viewer/$encoded?$ORIGIN_LEFT=$left&$ORIGIN_TOP=$top&$ORIGIN_WIDTH=$width&$ORIGIN_HEIGHT=$height"
+        val albumId = request.albumId ?: -1
+        return "viewer/$encoded?$ORIGIN_LEFT=$left&$ORIGIN_TOP=$top&$ORIGIN_WIDTH=$width&$ORIGIN_HEIGHT=$height&$ALBUM_ID=$albumId"
     }
 }
 
@@ -102,6 +112,7 @@ fun AppNavHost(
                 navArgument("originTop") { type = NavType.IntType; defaultValue = -1 },
                 navArgument("originWidth") { type = NavType.IntType; defaultValue = -1 },
                 navArgument("originHeight") { type = NavType.IntType; defaultValue = -1 },
+                navArgument("albumId") { type = NavType.LongType; defaultValue = -1L },
             ),
             enterTransition = { EnterTransition.None },
             exitTransition = { ExitTransition.None },
@@ -110,11 +121,14 @@ fun AppNavHost(
         ) { backStackEntry ->
             val encodedPath = backStackEntry.arguments?.getString("remotePath") ?: ""
             val remotePath = URLDecoder.decode(encodedPath, "UTF-8")
+            val albumIdArg = backStackEntry.arguments?.getLong("albumId") ?: -1L
+            val albumId = albumIdArg.takeIf { it > -1L }
 
             val viewerViewModel: ViewerViewModel = viewModel(
                 factory = ViewerViewModelFactory(
                     viewerRepository = app.viewerRepository,
                     initialRemotePath = remotePath,
+                    albumId = albumId,
                 ),
             )
 
@@ -178,6 +192,7 @@ fun AppNavHost(
                 factory = PhotosViewModelFactory(
                     timelineRepository = app.timelineRepository,
                     syncOrchestrator = app.syncOrchestrator,
+                    albumRepository = app.albumRepository,
                 ),
             )
             PhotosScreen(
@@ -191,13 +206,44 @@ fun AppNavHost(
         composable(route = BottomNavDestination.Albums.route) {
             val albumsViewModel: AlbumsViewModel = viewModel(
                 factory = AlbumsViewModelFactory(
-                    folderDao = app.folderDao,
-                    mediaDao = app.mediaDao,
+                    albumRepository = app.albumRepository,
                 ),
             )
             AlbumsScreen(
                 viewModel = albumsViewModel,
-                onAlbumClick = { navController.navigate(BottomNavDestination.Photos.route) },
+                onAlbumClick = { albumId -> navController.navigate(NavRoutes.albumDetailRoute(albumId)) },
+            )
+        }
+
+        composable(
+            route = NavRoutes.ALBUM_DETAIL,
+            arguments = listOf(
+                navArgument("albumId") { type = NavType.LongType },
+            ),
+        ) { backStackEntry ->
+            val albumId = backStackEntry.arguments?.getLong("albumId")
+                ?: return@composable
+            val detailViewModel: AlbumDetailViewModel = viewModel(
+                factory = AlbumDetailViewModelFactory(
+                    albumId = albumId,
+                    albumRepository = app.albumRepository,
+                ),
+            )
+            AlbumDetailScreen(
+                viewModel = detailViewModel,
+                onBack = { navController.popBackStack() },
+                onAlbumDeleted = { navController.popBackStack() },
+                onMediaClick = { remotePath, originBounds ->
+                    navController.navigate(
+                        NavRoutes.viewerRoute(
+                            MediaOpenRequest(
+                                remotePath = remotePath,
+                                originBounds = originBounds,
+                                albumId = albumId,
+                            )
+                        )
+                    )
+                },
             )
         }
 

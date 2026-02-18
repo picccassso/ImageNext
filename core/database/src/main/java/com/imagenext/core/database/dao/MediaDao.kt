@@ -212,6 +212,23 @@ interface MediaDao {
     @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC")
     fun getTimelinePaged(): PagingSource<Int, MediaItemEntity>
 
+    /** Paged query for all photo-type media. */
+    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'image/%' ORDER BY timelineSortKey DESC")
+    fun getPhotosPaged(): PagingSource<Int, MediaItemEntity>
+
+    /** Paged query for all video-type media. */
+    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'video/%' ORDER BY timelineSortKey DESC")
+    fun getVideosPaged(): PagingSource<Int, MediaItemEntity>
+
+    /** Paged query for media items belonging to a specific manual album. */
+    @Query(
+        "SELECT m.* FROM media_items m " +
+            "INNER JOIN album_media_cross_ref am ON am.mediaRemotePath = m.remotePath " +
+            "WHERE am.albumId = :albumId " +
+            "ORDER BY m.timelineSortKey DESC"
+    )
+    fun getAlbumMediaPaged(albumId: Long): PagingSource<Int, MediaItemEntity>
+
     /** Returns a single media item by its remote path. */
     @Query("SELECT * FROM media_items WHERE remotePath = :remotePath LIMIT 1")
     suspend fun getByRemotePath(remotePath: String): MediaItemEntity?
@@ -219,6 +236,23 @@ interface MediaDao {
     /** Returns all media items ordered by timeline date descending (for viewer index lookup). */
     @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC")
     suspend fun getAllMediaList(): List<MediaItemEntity>
+
+    /** Returns all photos ordered by timeline date descending. */
+    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'image/%' ORDER BY timelineSortKey DESC")
+    suspend fun getPhotosList(): List<MediaItemEntity>
+
+    /** Returns all videos ordered by timeline date descending. */
+    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'video/%' ORDER BY timelineSortKey DESC")
+    suspend fun getVideosList(): List<MediaItemEntity>
+
+    /** Returns media items for a specific manual album ordered by timeline date descending. */
+    @Query(
+        "SELECT m.* FROM media_items m " +
+            "INNER JOIN album_media_cross_ref am ON am.mediaRemotePath = m.remotePath " +
+            "WHERE am.albumId = :albumId " +
+            "ORDER BY m.timelineSortKey DESC"
+    )
+    suspend fun getAlbumMediaList(albumId: Long): List<MediaItemEntity>
 
     /** Returns all matching media items for bulk merge logic. */
     @Query("SELECT * FROM media_items WHERE remotePath IN (:remotePaths)")
