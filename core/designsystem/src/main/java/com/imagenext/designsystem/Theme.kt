@@ -9,11 +9,11 @@ import androidx.compose.ui.unit.dp
 
 private val DarkColorScheme = darkColorScheme(
     primary = ImageNextAccent,
-    onPrimary = ImageNextWhite,
+    onPrimary = ImageNextBlack,
     primaryContainer = ImageNextAccentVariant,
-    onPrimaryContainer = ImageNextWhite,
+    onPrimaryContainer = ImageNextBlack,
     secondary = ImageNextAccentSecondary,
-    onSecondary = ImageNextWhite,
+    onSecondary = ImageNextBlack,
     background = ImageNextBlack,
     onBackground = ImageNextOnSurface,
     surface = ImageNextSurface,

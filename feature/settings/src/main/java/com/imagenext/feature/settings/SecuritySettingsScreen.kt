@@ -20,6 +20,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.imagenext.core.security.CertificateTrustStore
 import com.imagenext.core.security.LockMethod
+import com.imagenext.designsystem.ImageNextSurface
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -249,6 +250,8 @@ private fun PinDialog(
                 Text("Cancel")
             }
         },
+        containerColor = ImageNextSurface,
+        shape = RoundedCornerShape(16.dp),
     )
 }
 

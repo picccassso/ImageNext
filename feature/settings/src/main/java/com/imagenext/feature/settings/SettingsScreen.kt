@@ -7,7 +7,11 @@ import android.hardware.biometrics.BiometricPrompt
 import android.os.CancellationSignal
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,6 +57,7 @@ fun SettingsScreen(
     val activity = context as? Activity
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showDisablePinDialog by remember { mutableStateOf(false) }
+    var backupSettingsExpanded by remember { mutableStateOf(false) }
     var disablePin by remember { mutableStateOf("") }
     var disablePinError by remember { mutableStateOf<String?>(null) }
     val mediaPermissionLauncher = rememberLauncherForActivityResult(
@@ -213,6 +218,7 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
+                        // Enable toggle — always visible
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -265,6 +271,7 @@ fun SettingsScreen(
                             )
                         }
 
+                        // Destination — always visible
                         Spacer(modifier = Modifier.height(12.dp))
                         BackupDestinationPicker(
                             value = uiState.backupPolicy.backupRoot,
@@ -291,6 +298,7 @@ fun SettingsScreen(
                         }
 
                         if (uiState.backupPolicy.enabled) {
+                            // Media permission warning — always visible when enabled
                             if (
                                 uiState.backupPolicy.sourceScope == BackupSourceScope.FULL_LIBRARY &&
                                 !uiState.hasMediaPermission
@@ -314,274 +322,313 @@ fun SettingsScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "Source",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                BackupSourceScope.entries.forEach { scope ->
-                                    FilterChip(
-                                        selected = uiState.backupPolicy.sourceScope == scope,
-                                        onClick = { viewModel.updateBackupPolicy { it.copy(sourceScope = scope) } },
-                                        label = { Text(sourceScopeLabel(scope)) },
-                                    )
-                                }
-                            }
-
-                            if (uiState.backupPolicy.sourceScope == BackupSourceScope.SELECTED_FOLDERS) {
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Button(
-                                    onClick = { folderPickerLauncher.launch(null) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Text("Add folder to backup")
-                                }
-                                LocalBackupFolderPicker(
-                                    selectedFolders = uiState.selectedLocalFolders,
-                                    onRemoveFolder = { treeUri ->
-                                        try {
-                                            context.contentResolver.releasePersistableUriPermission(
-                                                android.net.Uri.parse(treeUri),
-                                                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                                                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                                            )
-                                        } catch (_: SecurityException) {
-                                            // Ignore if provider doesn't support permission release.
-                                        }
-                                        viewModel.removeLocalBackupFolder(treeUri)
-                                    },
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "Upload structure",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                BackupUploadStructure.entries.forEach { structure ->
-                                    FilterChip(
-                                        selected = uiState.backupPolicy.uploadStructure == structure,
-                                        onClick = {
-                                            viewModel.updateBackupPolicy {
-                                                it.copy(uploadStructure = structure)
-                                            }
-                                        },
-                                        label = { Text(uploadStructureLabel(structure)) },
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "Sync mode",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                BackupSyncMode.entries.forEach { mode ->
-                                    FilterChip(
-                                        selected = uiState.backupPolicy.syncMode == mode,
-                                        onClick = { viewModel.updateBackupPolicy { it.copy(syncMode = mode) } },
-                                        label = { Text(modeLabel(mode)) },
-                                    )
-                                }
-                            }
-
-                            if (uiState.backupPolicy.syncMode == BackupSyncMode.SCHEDULED) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    BackupScheduleType.entries.forEach { type ->
-                                        FilterChip(
-                                            selected = uiState.backupPolicy.scheduleType == type,
-                                            onClick = { viewModel.updateBackupPolicy { it.copy(scheduleType = type) } },
-                                            label = { Text(scheduleTypeLabel(type)) },
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                if (uiState.backupPolicy.scheduleType == BackupScheduleType.INTERVAL_HOURS) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        listOf(2, 4, 6, 12, 24).forEach { hours ->
-                                            FilterChip(
-                                                selected = uiState.backupPolicy.scheduleIntervalHours == hours,
-                                                onClick = {
-                                                    viewModel.updateBackupPolicy {
-                                                        it.copy(scheduleIntervalHours = hours)
-                                                    }
-                                                },
-                                                label = { Text("${hours}h") },
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OutlinedTextField(
-                                            value = uiState.backupPolicy.dailyHour.toString(),
-                                            onValueChange = { raw ->
-                                                raw.toIntOrNull()?.let { hour ->
-                                                    viewModel.updateBackupPolicy { it.copy(dailyHour = hour.coerceIn(0, 23)) }
-                                                }
-                                            },
-                                            label = { Text("Hour") },
-                                            singleLine = true,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                        OutlinedTextField(
-                                            value = uiState.backupPolicy.dailyMinute.toString(),
-                                            onValueChange = { raw ->
-                                                raw.toIntOrNull()?.let { minute ->
-                                                    viewModel.updateBackupPolicy { it.copy(dailyMinute = minute.coerceIn(0, 59)) }
-                                                }
-                                            },
-                                            label = { Text("Minute") },
-                                            singleLine = true,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "Network",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                BackupNetworkPolicy.entries.forEach { policy ->
-                                    FilterChip(
-                                        selected = uiState.backupPolicy.networkPolicy == policy,
-                                        onClick = {
-                                            viewModel.updateBackupPolicy { it.copy(networkPolicy = policy) }
-                                        },
-                                        label = { Text(networkPolicyLabel(policy)) },
-                                    )
-                                }
-                            }
+                            // Configure toggle row
+                            Spacer(modifier = Modifier.height(4.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { backupSettingsExpanded = !backupSettingsExpanded }
+                                    .padding(vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
-                                Text("Allow roaming", style = MaterialTheme.typography.bodySmall)
-                                Switch(
-                                    checked = uiState.backupPolicy.allowRoaming,
-                                    onCheckedChange = { next ->
-                                        viewModel.updateBackupPolicy { it.copy(allowRoaming = next) }
-                                    },
-                                )
-                            }
-                            if (!uiState.backupPolicy.autoSelectBackupRoot) {
                                 Text(
-                                    text = "Warning: if backup root is not selected for viewing, uploaded media may not appear in timeline.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
+                                    text = "Configure backup",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Icon(
+                                    imageVector = if (backupSettingsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = if (backupSettingsExpanded) "Collapse" else "Expand",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
 
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "Power",
-style = MaterialTheme.typography.bodyMedium,
-color = MaterialTheme.colorScheme.onSurface,
-)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                BackupPowerPolicy.entries.forEach { power ->
-                                    FilterChip(
-                                        selected = uiState.backupPolicy.powerPolicy == power,
-                                        onClick = {
-                                            viewModel.updateBackupPolicy { it.copy(powerPolicy = power) }
-                                        },
-                                        label = { Text(powerPolicyLabel(power)) },
+                            // Collapsible settings
+                            AnimatedVisibility(
+                                visible = backupSettingsExpanded,
+                                enter = expandVertically(),
+                                exit = shrinkVertically(),
+                            ) {
+                                Column {
+                                    // Source
+                                    Text(
+                                        text = "Source",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text("Upload photos", style = MaterialTheme.typography.bodySmall)
-                                Switch(
-                                    checked = uiState.backupPolicy.mediaTypes.uploadPhotos,
-                                    onCheckedChange = { next ->
-                                        viewModel.updateBackupPolicy {
-                                            it.copy(mediaTypes = it.mediaTypes.copy(uploadPhotos = next))
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                        BackupSourceScope.entries.forEachIndexed { index, scope ->
+                                            SegmentedButton(
+                                                selected = uiState.backupPolicy.sourceScope == scope,
+                                                onClick = { viewModel.updateBackupPolicy { it.copy(sourceScope = scope) } },
+                                                shape = SegmentedButtonDefaults.itemShape(index, BackupSourceScope.entries.size),
+                                                label = { Text(sourceScopeLabel(scope), maxLines = 1) },
+                                            )
                                         }
-                                    },
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text("Upload videos", style = MaterialTheme.typography.bodySmall)
-                                Switch(
-                                    checked = uiState.backupPolicy.mediaTypes.uploadVideos,
-                                    onCheckedChange = { next ->
-                                        viewModel.updateBackupPolicy {
-                                            it.copy(mediaTypes = it.mediaTypes.copy(uploadVideos = next))
-                                        }
-                                    },
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text("Auto-upload new files", style = MaterialTheme.typography.bodySmall)
-                                Switch(
-                                    checked = uiState.backupPolicy.autoUploadNewMedia,
-                                    onCheckedChange = { next ->
-                                        viewModel.updateBackupPolicy { it.copy(autoUploadNewMedia = next) }
-                                    },
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text("Auto-select backup root", style = MaterialTheme.typography.bodySmall)
-                                Switch(
-                                    checked = uiState.backupPolicy.autoSelectBackupRoot,
-                                    onCheckedChange = { next ->
-                                        viewModel.updateBackupPolicy { it.copy(autoSelectBackupRoot = next) }
-                                    },
-                                )
-                            }
+                                    }
 
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "Delete behavior",
-style = MaterialTheme.typography.bodyMedium,
-color = MaterialTheme.colorScheme.onSurface,
-)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                BackupDeletePolicy.entries.forEach { deletePolicy ->
-                                    FilterChip(
-                                        selected = uiState.backupPolicy.deletePolicy == deletePolicy,
-                                        onClick = {
-                                            viewModel.updateBackupPolicy { it.copy(deletePolicy = deletePolicy) }
-                                        },
-                                        label = { Text(deletePolicyLabel(deletePolicy)) },
+                                    if (uiState.backupPolicy.sourceScope == BackupSourceScope.SELECTED_FOLDERS) {
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        Button(
+                                            onClick = { folderPickerLauncher.launch(null) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Text("Add folder to backup")
+                                        }
+                                        LocalBackupFolderPicker(
+                                            selectedFolders = uiState.selectedLocalFolders,
+                                            onRemoveFolder = { treeUri ->
+                                                try {
+                                                    context.contentResolver.releasePersistableUriPermission(
+                                                        android.net.Uri.parse(treeUri),
+                                                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                                            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                                                    )
+                                                } catch (_: SecurityException) {
+                                                    // Ignore if provider doesn't support permission release.
+                                                }
+                                                viewModel.removeLocalBackupFolder(treeUri)
+                                            },
+                                        )
+                                    }
+
+                                    // Upload structure
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = "Upload structure",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
-                                }
-                            }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                        BackupUploadStructure.entries.forEachIndexed { index, structure ->
+                                            SegmentedButton(
+                                                selected = uiState.backupPolicy.uploadStructure == structure,
+                                                onClick = { viewModel.updateBackupPolicy { it.copy(uploadStructure = structure) } },
+                                                shape = SegmentedButtonDefaults.itemShape(index, BackupUploadStructure.entries.size),
+                                                label = { Text(uploadStructureLabel(structure), maxLines = 1) },
+                                            )
+                                        }
+                                    }
 
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Button(
-                                onClick = { viewModel.syncNowCombined() },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text("Sync now (download + upload)")
+                                    // Sync mode
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = "Sync mode",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                        BackupSyncMode.entries.forEachIndexed { index, mode ->
+                                            SegmentedButton(
+                                                selected = uiState.backupPolicy.syncMode == mode,
+                                                onClick = { viewModel.updateBackupPolicy { it.copy(syncMode = mode) } },
+                                                shape = SegmentedButtonDefaults.itemShape(index, BackupSyncMode.entries.size),
+                                                label = { Text(modeLabel(mode), maxLines = 1) },
+                                            )
+                                        }
+                                    }
+
+                                    if (uiState.backupPolicy.syncMode == BackupSyncMode.SCHEDULED) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                            BackupScheduleType.entries.forEachIndexed { index, type ->
+                                                SegmentedButton(
+                                                    selected = uiState.backupPolicy.scheduleType == type,
+                                                    onClick = { viewModel.updateBackupPolicy { it.copy(scheduleType = type) } },
+                                                    shape = SegmentedButtonDefaults.itemShape(index, BackupScheduleType.entries.size),
+                                                    label = { Text(scheduleTypeLabel(type), maxLines = 1) },
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        if (uiState.backupPolicy.scheduleType == BackupScheduleType.INTERVAL_HOURS) {
+                                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                                listOf(2, 4, 6, 12, 24).forEachIndexed { index, hours ->
+                                                    SegmentedButton(
+                                                        selected = uiState.backupPolicy.scheduleIntervalHours == hours,
+                                                        onClick = { viewModel.updateBackupPolicy { it.copy(scheduleIntervalHours = hours) } },
+                                                        shape = SegmentedButtonDefaults.itemShape(index, 5),
+                                                        label = { Text("${hours}h", maxLines = 1) },
+                                                    )
+                                                }
+                                            }
+                                        } else {
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                OutlinedTextField(
+                                                    value = uiState.backupPolicy.dailyHour.toString(),
+                                                    onValueChange = { raw ->
+                                                        raw.toIntOrNull()?.let { hour ->
+                                                            viewModel.updateBackupPolicy { it.copy(dailyHour = hour.coerceIn(0, 23)) }
+                                                        }
+                                                    },
+                                                    label = { Text("Hour") },
+                                                    singleLine = true,
+                                                    modifier = Modifier.weight(1f),
+                                                )
+                                                OutlinedTextField(
+                                                    value = uiState.backupPolicy.dailyMinute.toString(),
+                                                    onValueChange = { raw ->
+                                                        raw.toIntOrNull()?.let { minute ->
+                                                            viewModel.updateBackupPolicy { it.copy(dailyMinute = minute.coerceIn(0, 59)) }
+                                                        }
+                                                    },
+                                                    label = { Text("Minute") },
+                                                    singleLine = true,
+                                                    modifier = Modifier.weight(1f),
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Network
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = "Network",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                        BackupNetworkPolicy.entries.forEachIndexed { index, policy ->
+                                            SegmentedButton(
+                                                selected = uiState.backupPolicy.networkPolicy == policy,
+                                                onClick = { viewModel.updateBackupPolicy { it.copy(networkPolicy = policy) } },
+                                                shape = SegmentedButtonDefaults.itemShape(index, BackupNetworkPolicy.entries.size),
+                                                label = { Text(networkPolicyLabel(policy), maxLines = 1) },
+                                            )
+                                        }
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                    ) {
+                                        Text("Allow roaming", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                        Switch(
+                                            checked = uiState.backupPolicy.allowRoaming,
+                                            onCheckedChange = { next ->
+                                                viewModel.updateBackupPolicy { it.copy(allowRoaming = next) }
+                                            },
+                                        )
+                                    }
+
+                                    // Power
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Power",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                        BackupPowerPolicy.entries.forEachIndexed { index, power ->
+                                            SegmentedButton(
+                                                selected = uiState.backupPolicy.powerPolicy == power,
+                                                onClick = { viewModel.updateBackupPolicy { it.copy(powerPolicy = power) } },
+                                                shape = SegmentedButtonDefaults.itemShape(index, BackupPowerPolicy.entries.size),
+                                                label = { Text(powerPolicyLabel(power), maxLines = 1) },
+                                            )
+                                        }
+                                    }
+
+                                    // Media type toggles
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                    ) {
+                                        Text("Upload photos", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                        Switch(
+                                            checked = uiState.backupPolicy.mediaTypes.uploadPhotos,
+                                            onCheckedChange = { next ->
+                                                viewModel.updateBackupPolicy {
+                                                    it.copy(mediaTypes = it.mediaTypes.copy(uploadPhotos = next))
+                                                }
+                                            },
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                    ) {
+                                        Text("Upload videos", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                        Switch(
+                                            checked = uiState.backupPolicy.mediaTypes.uploadVideos,
+                                            onCheckedChange = { next ->
+                                                viewModel.updateBackupPolicy {
+                                                    it.copy(mediaTypes = it.mediaTypes.copy(uploadVideos = next))
+                                                }
+                                            },
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                    ) {
+                                        Text("Auto-upload new files", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                        Switch(
+                                            checked = uiState.backupPolicy.autoUploadNewMedia,
+                                            onCheckedChange = { next ->
+                                                viewModel.updateBackupPolicy { it.copy(autoUploadNewMedia = next) }
+                                            },
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                    ) {
+                                        Text("Auto-select backup root", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                        Switch(
+                                            checked = uiState.backupPolicy.autoSelectBackupRoot,
+                                            onCheckedChange = { next ->
+                                                viewModel.updateBackupPolicy { it.copy(autoSelectBackupRoot = next) }
+                                            },
+                                        )
+                                    }
+                                    if (!uiState.backupPolicy.autoSelectBackupRoot) {
+                                        Text(
+                                            text = "Warning: if backup root is not selected for viewing, uploaded media may not appear in timeline.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+
+                                    // Delete behavior
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = "Delete behavior",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                        BackupDeletePolicy.entries.forEachIndexed { index, deletePolicy ->
+                                            SegmentedButton(
+                                                selected = uiState.backupPolicy.deletePolicy == deletePolicy,
+                                                onClick = { viewModel.updateBackupPolicy { it.copy(deletePolicy = deletePolicy) } },
+                                                shape = SegmentedButtonDefaults.itemShape(index, BackupDeletePolicy.entries.size),
+                                                label = { Text(deletePolicyLabel(deletePolicy), maxLines = 1) },
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Button(
+                                        onClick = { viewModel.syncNowCombined() },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("Sync now (download + upload)")
+                                    }
+                                }
                             }
                         }
                     }
@@ -1087,12 +1134,12 @@ private fun networkPolicyLabel(policy: BackupNetworkPolicy): String = when (poli
 private fun powerPolicyLabel(policy: BackupPowerPolicy): String = when (policy) {
     BackupPowerPolicy.REQUIRE_CHARGING -> "Charging"
     BackupPowerPolicy.REQUIRE_DEVICE_IDLE -> "Idle"
-    BackupPowerPolicy.NONE -> "No requirement"
+    BackupPowerPolicy.NONE -> "None"
 }
 
 private fun deletePolicyLabel(policy: BackupDeletePolicy): String = when (policy) {
-    BackupDeletePolicy.APPEND_ONLY -> "Never delete remote"
-    BackupDeletePolicy.MIRROR_DELETE -> "Mirror local deletes"
+    BackupDeletePolicy.APPEND_ONLY -> "Never delete"
+    BackupDeletePolicy.MIRROR_DELETE -> "Mirror deletes"
 }
 
 private fun sourceScopeLabel(scope: BackupSourceScope): String = when (scope) {
@@ -1102,5 +1149,5 @@ private fun sourceScopeLabel(scope: BackupSourceScope): String = when (scope) {
 
 private fun uploadStructureLabel(structure: BackupUploadStructure): String = when (structure) {
     BackupUploadStructure.FLAT_FOLDER -> "Flat folder"
-    BackupUploadStructure.YEAR_MONTH_FOLDERS -> "Year/Month folders"
+    BackupUploadStructure.YEAR_MONTH_FOLDERS -> "Year/Month"
 }
