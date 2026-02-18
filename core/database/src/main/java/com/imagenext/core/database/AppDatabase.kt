@@ -8,18 +8,26 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.imagenext.core.database.dao.AlbumDao
 import com.imagenext.core.database.dao.FolderDao
+import com.imagenext.core.database.dao.LocalBackupAlbumDao
+import com.imagenext.core.database.dao.LocalBackupFolderDao
 import com.imagenext.core.database.dao.MediaDao
+import com.imagenext.core.database.dao.UploadQueueDao
+import com.imagenext.core.database.dao.UploadedMediaRegistryDao
 import com.imagenext.core.database.entity.AlbumEntity
 import com.imagenext.core.database.entity.AlbumMediaCrossRefEntity
+import com.imagenext.core.database.entity.LocalBackupAlbumEntity
+import com.imagenext.core.database.entity.LocalBackupFolderEntity
 import com.imagenext.core.database.entity.MediaItemEntity
 import com.imagenext.core.database.entity.SelectedFolderEntity
 import com.imagenext.core.database.entity.SyncCheckpointEntity
+import com.imagenext.core.database.entity.UploadQueueEntity
+import com.imagenext.core.database.entity.UploadedMediaRegistryEntity
 
 /**
  * Room database root for ImageNext.
  *
  * Contains entities for media metadata, folder selections, sync checkpoints, and local albums.
- * Version 6 — preserves album membership during media upserts.
+ * Version 8 — adds SAF-backed local backup folder selections.
  *
  * Migration policy: future schema changes should use Room's migration API
  * to preserve user data across app updates.
@@ -31,8 +39,12 @@ import com.imagenext.core.database.entity.SyncCheckpointEntity
         SyncCheckpointEntity::class,
         AlbumEntity::class,
         AlbumMediaCrossRefEntity::class,
+        UploadQueueEntity::class,
+        UploadedMediaRegistryEntity::class,
+        LocalBackupAlbumEntity::class,
+        LocalBackupFolderEntity::class,
     ],
-    version = 6,
+    version = 8,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -40,6 +52,10 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun mediaDao(): MediaDao
     abstract fun folderDao(): FolderDao
     abstract fun albumDao(): AlbumDao
+    abstract fun uploadQueueDao(): UploadQueueDao
+    abstract fun uploadedMediaRegistryDao(): UploadedMediaRegistryDao
+    abstract fun localBackupAlbumDao(): LocalBackupAlbumDao
+    abstract fun localBackupFolderDao(): LocalBackupFolderDao
 
     companion object {
         private const val DATABASE_NAME = "imagenext_database"
@@ -63,6 +79,8 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(MIGRATION_3_4)
                     .addMigrations(MIGRATION_4_5)
                     .addMigrations(MIGRATION_5_6)
+                    .addMigrations(MIGRATION_6_7)
+                    .addMigrations(MIGRATION_7_8)
                     .build()
                     .also { INSTANCE = it }
             }
@@ -185,6 +203,92 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_album_media_cross_ref_mediaRemotePath` " +
                         "ON `album_media_cross_ref` (`mediaRemotePath`)"
+                )
+            }
+        }
+
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `upload_queue` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`stableKey` TEXT NOT NULL, " +
+                        "`operation` TEXT NOT NULL DEFAULT 'UPLOAD', " +
+                        "`localUri` TEXT, " +
+                        "`mimeType` TEXT, " +
+                        "`size` INTEGER, " +
+                        "`dateTaken` INTEGER, " +
+                        "`targetRemoteFolder` TEXT NOT NULL, " +
+                        "`targetFileName` TEXT NOT NULL, " +
+                        "`status` TEXT NOT NULL DEFAULT 'PENDING', " +
+                        "`retryCount` INTEGER NOT NULL DEFAULT 0, " +
+                        "`lastError` TEXT, " +
+                        "`lastAttemptAt` INTEGER, " +
+                        "`bytesTotal` INTEGER, " +
+                        "`bytesUploaded` INTEGER, " +
+                        "`remotePath` TEXT, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, " +
+                        "`nextAttemptAt` INTEGER NOT NULL DEFAULT 0)"
+                )
+                database.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_upload_queue_stableKey_operation` " +
+                        "ON `upload_queue` (`stableKey`, `operation`)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_upload_queue_status_nextAttemptAt` " +
+                        "ON `upload_queue` (`status`, `nextAttemptAt`)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_upload_queue_createdAt` " +
+                        "ON `upload_queue` (`createdAt`)"
+                )
+
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `uploaded_media_registry` (" +
+                        "`stableKey` TEXT NOT NULL, " +
+                        "`remotePath` TEXT NOT NULL, " +
+                        "`lastKnownLocalUri` TEXT, " +
+                        "`bucketId` TEXT NOT NULL, " +
+                        "`size` INTEGER NOT NULL, " +
+                        "`dateTaken` INTEGER, " +
+                        "`sha256` TEXT, " +
+                        "`lastSeenAt` INTEGER NOT NULL, " +
+                        "`uploadedAt` INTEGER NOT NULL, " +
+                        "`deletedRemotelyAt` INTEGER, " +
+                        "PRIMARY KEY(`stableKey`))"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_uploaded_media_registry_remotePath` " +
+                        "ON `uploaded_media_registry` (`remotePath`)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_uploaded_media_registry_bucketId` " +
+                        "ON `uploaded_media_registry` (`bucketId`)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_uploaded_media_registry_deletedRemotelyAt` " +
+                        "ON `uploaded_media_registry` (`deletedRemotelyAt`)"
+                )
+
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `local_backup_albums` (" +
+                        "`bucketId` TEXT NOT NULL, " +
+                        "`displayName` TEXT NOT NULL, " +
+                        "`addedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`bucketId`))"
+                )
+            }
+        }
+
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `local_backup_folders` (" +
+                        "`treeUri` TEXT NOT NULL, " +
+                        "`displayName` TEXT NOT NULL, " +
+                        "`addedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`treeUri`))"
                 )
             }
         }

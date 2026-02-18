@@ -1,10 +1,15 @@
 package com.imagenext.core.network.webdav
 
 import com.imagenext.core.model.SelectedFolder
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
+import java.io.ByteArrayInputStream
 
 class WebDavClientTest {
 
@@ -316,5 +321,94 @@ class WebDavClientTest {
     @Test
     fun `MAX_RESPONSE_SIZE is 2MB`() {
         assertEquals(2 * 1024 * 1024, WebDavClient.MAX_RESPONSE_SIZE)
+    }
+
+    @Test
+    fun `ensureFolderPath treats existing path as success`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(201))
+        server.enqueue(MockResponse().setResponseCode(405))
+        server.start()
+        try {
+            val client = WebDavClient(OkHttpClient())
+            val result = client.ensureFolderPath(
+                serverUrl = server.url("/").toString().trimEnd('/'),
+                loginName = "testuser",
+                appPassword = "app-pass",
+                folderPath = "/Photos/2026",
+            )
+            assertTrue(result is WebDavClient.WebDavResult.Success)
+            assertEquals("MKCOL", server.takeRequest().method)
+            assertEquals("MKCOL", server.takeRequest().method)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `headFile maps 404 to null success`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.start()
+        try {
+            val client = WebDavClient(OkHttpClient())
+            val result = client.headFile(
+                serverUrl = server.url("/").toString().trimEnd('/'),
+                loginName = "testuser",
+                appPassword = "app-pass",
+                remotePath = "/Photos/a.jpg",
+            )
+            assertTrue(result is WebDavClient.WebDavResult.Success)
+            val data = (result as WebDavClient.WebDavResult.Success).data
+            assertNull(data)
+            assertEquals("HEAD", server.takeRequest().method)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `putFile sends PUT and returns success`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(201))
+        server.start()
+        try {
+            val client = WebDavClient(OkHttpClient())
+            val result = client.putFile(
+                serverUrl = server.url("/").toString().trimEnd('/'),
+                loginName = "testuser",
+                appPassword = "app-pass",
+                remotePath = "/Photos/new.jpg",
+                contentType = "image/jpeg",
+                contentLength = 4L,
+                inputStreamProvider = { ByteArrayInputStream(byteArrayOf(1, 2, 3, 4)) },
+            )
+            assertTrue(result is WebDavClient.WebDavResult.Success)
+            val request = server.takeRequest()
+            assertEquals("PUT", request.method)
+            assertEquals(4, request.bodySize)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `deleteFile treats 404 as success`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.start()
+        try {
+            val client = WebDavClient(OkHttpClient())
+            val result = client.deleteFile(
+                serverUrl = server.url("/").toString().trimEnd('/'),
+                loginName = "testuser",
+                appPassword = "app-pass",
+                remotePath = "/Photos/old.jpg",
+            )
+            assertTrue(result is WebDavClient.WebDavResult.Success)
+            assertEquals("DELETE", server.takeRequest().method)
+        } finally {
+            server.shutdown()
+        }
     }
 }

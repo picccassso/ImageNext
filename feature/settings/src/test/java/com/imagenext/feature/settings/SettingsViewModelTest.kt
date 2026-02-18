@@ -26,6 +26,10 @@ class SettingsViewModelTest {
         assertEquals(0, state.selectedFolderCount)
         assertEquals(SyncState.Idle, state.syncState)
         assertEquals(null, state.syncIssue)
+        assertTrue(state.backupFolderOptions.isEmpty())
+        assertFalse(state.isBackupFolderPickerVisible)
+        assertFalse(state.isBackupFolderPickerLoading)
+        assertFalse(state.backupRootNeedsReselection)
         assertTrue(state.trustedCertificates.isEmpty())
         assertFalse(state.isAppLockEnabled)
     }

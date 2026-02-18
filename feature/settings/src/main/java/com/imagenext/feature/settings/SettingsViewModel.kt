@@ -1,11 +1,18 @@
 package com.imagenext.feature.settings
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.imagenext.core.data.BackupPolicyRepository
 import com.imagenext.core.data.FolderRepositoryImpl
+import com.imagenext.core.data.LocalMediaDetector
 import com.imagenext.core.database.AppDatabase
+import com.imagenext.core.database.entity.LocalBackupFolderEntity
+import com.imagenext.core.model.BackupPolicy
+import com.imagenext.core.model.BackupSyncState
 import com.imagenext.core.model.SyncState
+import com.imagenext.core.model.SelectedFolder
 import com.imagenext.core.network.auth.NextcloudAuthApi
 import com.imagenext.core.security.AppLockManager
 import com.imagenext.core.security.CertificateTrustStore
@@ -23,9 +30,6 @@ import kotlinx.coroutines.withContext
 
 /**
  * Settings state and action orchestration.
- *
- * Provides account info, sync status, security controls, and logout functionality.
- * All credential data is read through [SessionRepository] with no passwords exposed to UI.
  */
 class SettingsViewModel(
     private val sessionRepository: SessionRepository,
@@ -35,19 +39,26 @@ class SettingsViewModel(
     private val certificateTrustStore: CertificateTrustStore,
     private val appLockManager: AppLockManager,
     private val database: AppDatabase,
+    private val backupPolicyRepository: BackupPolicyRepository,
+    private val localMediaDetector: LocalMediaDetector,
 ) : ViewModel() {
 
     private val folderDao by lazy { database.folderDao() }
+    private val localBackupFolderDao by lazy { database.localBackupFolderDao() }
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
     private val _logoutEvent = MutableStateFlow(false)
     val logoutEvent: StateFlow<Boolean> = _logoutEvent.asStateFlow()
+    private var hasValidatedBackupRoot = false
 
     init {
         loadSettings()
         observeSyncState()
+        observeBackupState()
+        observeBackupPolicy()
+        observeSelectedBackupFolders()
         observeConnectionStatus()
     }
 
@@ -61,21 +72,21 @@ class SettingsViewModel(
                 val lockMethod = appLockManager.getLockMethod()
                 val biometricAvailable = appLockManager.isBiometricAvailable()
                 val hasPin = appLockManager.hasPin()
-                val connectionStatus = when {
-                    session == null -> ConnectionStatus.NOT_CONNECTED
-                    else -> ConnectionStatus.NOT_CONNECTED
-                }
+                val hasMediaPermission = localMediaDetector.hasReadPermission()
+                val backupPolicy = backupPolicyRepository.getPolicy()
 
                 _uiState.value = _uiState.value.copy(
                     serverUrl = session?.serverUrl ?: "",
                     loginName = session?.loginName ?: "",
-                    connectionStatus = connectionStatus,
+                    connectionStatus = ConnectionStatus.NOT_CONNECTED,
                     selectedFolderCount = folderCount,
                     trustedCertificates = trustedCerts,
                     isAppLockEnabled = isLockEnabled,
                     lockMethod = lockMethod,
                     isBiometricAvailable = biometricAvailable,
                     hasPin = hasPin,
+                    hasMediaPermission = hasMediaPermission,
+                    backupPolicy = backupPolicy,
                     isLoading = false,
                 )
             } catch (_: Exception) {
@@ -99,6 +110,223 @@ class SettingsViewModel(
                 )
             }
         }
+    }
+
+    private fun observeBackupState() {
+        viewModelScope.launch {
+            syncOrchestrator.observeBackupState().collect { backupState ->
+                _uiState.value = _uiState.value.copy(backupSyncState = backupState)
+            }
+        }
+    }
+
+    private fun observeBackupPolicy() {
+        viewModelScope.launch {
+            backupPolicyRepository.policyFlow.collect { policy ->
+                val normalizedBackupRoot = normalizeRemotePath(policy.backupRoot)
+                val hasKnownBackupRoot = _uiState.value.backupFolderOptions
+                    .any { it.remotePath == normalizedBackupRoot }
+                val needsReselection = if (!policy.backupRootSelectedByUser) {
+                    true
+                } else if (_uiState.value.backupFolderOptions.isNotEmpty()) {
+                    !hasKnownBackupRoot
+                } else {
+                    _uiState.value.backupRootNeedsReselection
+                }
+                _uiState.value = _uiState.value.copy(
+                    backupPolicy = policy.copy(backupRoot = normalizedBackupRoot),
+                    hasMediaPermission = localMediaDetector.hasReadPermission(),
+                    backupRootNeedsReselection = needsReselection,
+                )
+                syncOrchestrator.applyBackupScheduling(policy)
+                if (
+                    policy.enabled &&
+                    policy.autoSelectBackupRoot &&
+                    policy.backupRootSelectedByUser &&
+                    !needsReselection
+                ) {
+                    ensureBackupRootSelected(normalizedBackupRoot)
+                }
+                if (policy.enabled || !policy.backupRootSelectedByUser) {
+                    if (!hasValidatedBackupRoot) {
+                        hasValidatedBackupRoot = true
+                        refreshBackupFolderOptions()
+                    }
+                } else {
+                    hasValidatedBackupRoot = false
+                }
+            }
+        }
+    }
+
+    private fun observeSelectedBackupFolders() {
+        viewModelScope.launch {
+            localBackupFolderDao.observeAll().collect { rows ->
+                _uiState.value = _uiState.value.copy(
+                    selectedLocalFolders = rows.map { row ->
+                        LocalBackupFolderOption(
+                            treeUri = row.treeUri,
+                            displayName = row.displayName,
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    private suspend fun ensureBackupRootSelected(backupRoot: String) {
+        val cleanRoot = normalizeRemotePath(backupRoot)
+        val selected = folderRepository.getSelectedFoldersList()
+        val alreadySelected = selected.any { normalizeRemotePath(it.remotePath) == cleanRoot }
+        if (alreadySelected) return
+
+        folderRepository.addFolder(
+            SelectedFolder(
+                remotePath = cleanRoot,
+                displayName = cleanRoot.substringAfterLast('/').ifBlank { "ImageNext Backup" },
+            )
+        )
+    }
+
+    fun onMediaPermissionResult(granted: Boolean) {
+        _uiState.value = _uiState.value.copy(hasMediaPermission = granted)
+    }
+
+    fun updateBackupPolicy(transform: (BackupPolicy) -> BackupPolicy) {
+        viewModelScope.launch(Dispatchers.IO) {
+            backupPolicyRepository.update(transform)
+        }
+    }
+
+    fun openBackupFolderPicker() {
+        _uiState.value = _uiState.value.copy(
+            isBackupFolderPickerVisible = true,
+            backupFolderPickerError = null,
+        )
+        refreshBackupFolderOptions()
+    }
+
+    fun dismissBackupFolderPicker() {
+        _uiState.value = _uiState.value.copy(isBackupFolderPickerVisible = false)
+    }
+
+    fun refreshBackupFolderOptions() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.value = _uiState.value.copy(
+                isBackupFolderPickerLoading = true,
+                backupFolderPickerError = null,
+            )
+
+            val session = sessionRepository.getSession()
+            if (session == null) {
+                _uiState.value = _uiState.value.copy(
+                    isBackupFolderPickerLoading = false,
+                    backupFolderPickerError = "Not connected. Please sign in again.",
+                )
+                return@launch
+            }
+
+            when (
+                val result = folderRepository.discoverFolders(
+                    serverUrl = session.serverUrl,
+                    loginName = session.loginName,
+                    appPassword = session.appPassword,
+                )
+            ) {
+                is com.imagenext.core.network.webdav.WebDavClient.WebDavResult.Success -> {
+                    val options = result.data
+                        .map { folder ->
+                            BackupRemoteFolderOption(
+                                remotePath = normalizeRemotePath(folder.remotePath),
+                                displayName = folder.displayName.ifBlank {
+                                    normalizeRemotePath(folder.remotePath)
+                                        .substringAfterLast('/')
+                                        .ifBlank { "/" }
+                                },
+                            )
+                        }
+                        .distinctBy { it.remotePath }
+                        .sortedBy { it.displayName.lowercase() }
+
+                    val normalizedBackupRoot = normalizeRemotePath(_uiState.value.backupPolicy.backupRoot)
+                    val hasMatch = options.any { it.remotePath == normalizedBackupRoot }
+                    val rootSelectedByUser = _uiState.value.backupPolicy.backupRootSelectedByUser
+
+                    _uiState.value = _uiState.value.copy(
+                        backupFolderOptions = options,
+                        isBackupFolderPickerLoading = false,
+                        backupFolderPickerError = null,
+                        backupRootNeedsReselection = !rootSelectedByUser || !hasMatch,
+                    )
+                }
+
+                is com.imagenext.core.network.webdav.WebDavClient.WebDavResult.Error -> {
+                    _uiState.value = _uiState.value.copy(
+                        isBackupFolderPickerLoading = false,
+                        backupFolderPickerError = result.message,
+                    )
+                }
+            }
+        }
+    }
+
+    fun selectBackupRoot(folderRemotePath: String, @Suppress("UNUSED_PARAMETER") displayName: String) {
+        val normalized = normalizeRemotePath(folderRemotePath)
+        viewModelScope.launch(Dispatchers.IO) {
+            backupPolicyRepository.update { current ->
+                current.copy(
+                    backupRoot = normalized,
+                    backupRootSelectedByUser = true,
+                )
+            }
+            _uiState.value = _uiState.value.copy(
+                isBackupFolderPickerVisible = false,
+                backupFolderPickerError = null,
+                backupRootNeedsReselection = false,
+            )
+        }
+    }
+
+    fun addLocalBackupFolder(treeUri: String, displayName: String?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            val finalDisplayName = displayName?.takeIf { it.isNotBlank() }
+                ?: deriveDisplayNameFromTreeUri(treeUri)
+
+            localBackupFolderDao.upsert(
+                LocalBackupFolderEntity(
+                    treeUri = treeUri,
+                    displayName = finalDisplayName,
+                    addedAt = now,
+                )
+            )
+        }
+    }
+
+    fun removeLocalBackupFolder(treeUri: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            localBackupFolderDao.deleteByUri(treeUri)
+        }
+    }
+
+    fun syncNowCombined() {
+        viewModelScope.launch {
+            syncOrchestrator.requestCombinedSyncNow()
+        }
+    }
+
+    private fun deriveDisplayNameFromTreeUri(treeUri: String): String {
+        val uri = Uri.parse(treeUri)
+        val last = uri.lastPathSegment.orEmpty()
+        if (last.isBlank()) return "Selected folder"
+        return Uri.decode(last).substringAfterLast(':').ifBlank { "Selected folder" }
+    }
+
+    private fun normalizeRemotePath(path: String): String {
+        val trimmed = path.trim()
+        if (trimmed.isBlank()) return "/"
+        val withPrefix = if (trimmed.startsWith('/')) trimmed else "/$trimmed"
+        return withPrefix.replace(Regex("/+"), "/").trimEnd('/').ifBlank { "/" }
     }
 
     private suspend fun resolveLatestSyncIssue(): String? {
@@ -128,8 +356,7 @@ class SettingsViewModel(
     }
 
     /**
-     * Periodically refreshes live server connectivity so Settings reflects
-     * connection changes without requiring an app restart.
+     * Periodically refreshes live server connectivity so Settings reflects changes.
      */
     private fun observeConnectionStatus() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -140,6 +367,7 @@ class SettingsViewModel(
                         session == null -> ConnectionStatus.NOT_CONNECTED
                         authApi.checkServerReachability(session.serverUrl) is NextcloudAuthApi.AuthResult.Success ->
                             ConnectionStatus.CONNECTED
+
                         else -> ConnectionStatus.NOT_CONNECTED
                     }
                 } catch (_: Exception) {
@@ -155,14 +383,12 @@ class SettingsViewModel(
         }
     }
 
-    /** Retries sync by re-scheduling the full workflow. */
     fun retrySync() {
         viewModelScope.launch {
             syncOrchestrator.retrySync()
         }
     }
 
-    /** Revokes trust for a certificate fingerprint. */
     fun revokeCertificate(fingerprint: String) {
         certificateTrustStore.revoke(fingerprint)
         _uiState.value = _uiState.value.copy(
@@ -170,7 +396,6 @@ class SettingsViewModel(
         )
     }
 
-    /** Toggles app lock on or off. */
     fun setAppLockEnabled(enabled: Boolean) {
         if (enabled) {
             val method = appLockManager.getLockMethod()
@@ -195,7 +420,6 @@ class SettingsViewModel(
         )
     }
 
-    /** Updates the selected app lock method. */
     fun setLockMethod(method: LockMethod) {
         if (method == LockMethod.BIOMETRIC && !appLockManager.hasPin()) {
             _uiState.value = _uiState.value.copy(
@@ -208,7 +432,6 @@ class SettingsViewModel(
         _uiState.value = _uiState.value.copy(lockMethod = method)
     }
 
-    /** Stores a PIN for PIN-based unlock and ensures lock is enabled. */
     fun savePin(pin: String) {
         appLockManager.setPin(pin)
         appLockManager.setLockEnabled(true)
@@ -219,53 +442,24 @@ class SettingsViewModel(
         )
     }
 
-    /** Verifies whether the provided PIN matches the stored app lock PIN. */
     fun verifyPin(pin: String): Boolean = appLockManager.verifyPin(pin)
 
-    /**
-     * Performs secure logout sequence.
-     *
-     * 1. Cancels active sync work.
-     * 2. Clears session credentials from encrypted vault.
-     * 3. Clears certificate trust decisions.
-     * 4. Resets app lock state.
-     * 5. Clears local database (media metadata, folders, checkpoints).
-     * 6. Signals navigation to return to onboarding.
-     */
     fun logout() {
         viewModelScope.launch {
-            // Cancel active sync
             syncOrchestrator.cancelSync()
-
-            // Clear all session secrets
             sessionRepository.clearSession()
-
-            // Clear certificate trust
             certificateTrustStore.clearAll()
-
-            // Reset app lock
             appLockManager.reset()
-
-            // Clear local database
             database.clearAllTables()
-
-            // Signal logout event for navigation
             _logoutEvent.value = true
         }
     }
 
-    /** Resets the logout event after navigation has been handled. */
     fun onLogoutHandled() {
         _logoutEvent.value = false
     }
 }
 
-/**
- * UI state for the Settings screen.
- *
- * Credential fields are intentionally limited to display-safe info
- * (server URL and login name — never passwords).
- */
 data class SettingsUiState(
     val isLoading: Boolean = true,
     val serverUrl: String = "",
@@ -274,11 +468,30 @@ data class SettingsUiState(
     val selectedFolderCount: Int = 0,
     val syncState: SyncState = SyncState.Idle,
     val syncIssue: String? = null,
+    val backupSyncState: BackupSyncState = BackupSyncState(),
+    val backupPolicy: BackupPolicy = BackupPolicy(),
+    val hasMediaPermission: Boolean = false,
+    val selectedLocalFolders: List<LocalBackupFolderOption> = emptyList(),
+    val backupFolderOptions: List<BackupRemoteFolderOption> = emptyList(),
+    val isBackupFolderPickerVisible: Boolean = false,
+    val isBackupFolderPickerLoading: Boolean = false,
+    val backupFolderPickerError: String? = null,
+    val backupRootNeedsReselection: Boolean = false,
     val trustedCertificates: List<CertificateTrustStore.TrustedCertificate> = emptyList(),
     val isAppLockEnabled: Boolean = false,
     val lockMethod: LockMethod = LockMethod.PIN,
     val isBiometricAvailable: Boolean = false,
     val hasPin: Boolean = false,
+)
+
+data class LocalBackupFolderOption(
+    val treeUri: String,
+    val displayName: String,
+)
+
+data class BackupRemoteFolderOption(
+    val remotePath: String,
+    val displayName: String,
 )
 
 enum class ConnectionStatus {
@@ -294,9 +507,6 @@ private const val ERROR_PREFIX_NOT_FOUND = "not_found"
 private const val ERROR_PREFIX_SECURITY = "security"
 private const val ERROR_PREFIX_CLIENT = "client"
 
-/**
- * Factory for [SettingsViewModel].
- */
 class SettingsViewModelFactory(
     private val sessionRepository: SessionRepository,
     private val authApi: NextcloudAuthApi,
@@ -305,6 +515,8 @@ class SettingsViewModelFactory(
     private val certificateTrustStore: CertificateTrustStore,
     private val appLockManager: AppLockManager,
     private val database: AppDatabase,
+    private val backupPolicyRepository: BackupPolicyRepository,
+    private val localMediaDetector: LocalMediaDetector,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -316,6 +528,8 @@ class SettingsViewModelFactory(
             certificateTrustStore = certificateTrustStore,
             appLockManager = appLockManager,
             database = database,
+            backupPolicyRepository = backupPolicyRepository,
+            localMediaDetector = localMediaDetector,
         ) as T
     }
 }

@@ -13,6 +13,12 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.imagenext.core.database.AppDatabase
 import com.imagenext.core.database.dao.ReadyThumbnailReference
+import com.imagenext.core.model.BackupPolicy
+import com.imagenext.core.model.BackupRunState
+import com.imagenext.core.model.BackupScheduleType
+import com.imagenext.core.model.BackupSyncMode
+import com.imagenext.core.model.BackupSyncState
+import com.imagenext.core.model.UploadStatus
 import com.imagenext.core.model.SyncState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -21,11 +27,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.time.Duration
+import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 
 /**
@@ -46,12 +53,15 @@ class SyncOrchestrator(
 
     private val workManager = WorkManager.getInstance(context)
     private val mediaDao by lazy { AppDatabase.getInstance(context).mediaDao() }
+    private val uploadQueueDao by lazy { AppDatabase.getInstance(context).uploadQueueDao() }
     private val syncPrefs by lazy {
         context.getSharedPreferences(SYNC_PREFS_NAME, Context.MODE_PRIVATE)
     }
 
     private val _syncState = MutableStateFlow(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
+    private val _backupState = MutableStateFlow(BackupSyncState())
+    val backupState: StateFlow<BackupSyncState> = _backupState.asStateFlow()
 
     private var dominantErrorSnapshot: DominantErrorSnapshot? = null
 
@@ -147,6 +157,34 @@ class SyncOrchestrator(
     }
 
     /**
+     * Observes backup upload state from worker history + queue counts.
+     */
+    fun observeBackupState(): Flow<BackupSyncState> {
+        return combine(
+            workManager.getWorkInfosForUniqueWorkFlow(MediaUploadWorker.WORK_NAME),
+            uploadQueueDao.observeCountByStatus(UploadStatus.PENDING.name),
+            uploadQueueDao.observeCountByStatus(UploadStatus.FAILED.name),
+        ) { uploadInfos, pendingCount, failedCount ->
+            val latestUploadInfo = latestInfoForWorker(
+                infos = uploadInfos,
+                workerTag = MediaUploadWorker::class.java.name,
+            )
+            val latestReportableTerminalInfo = latestReportableTerminalInfoForWorker(
+                infos = uploadInfos,
+                workerTag = MediaUploadWorker::class.java.name,
+            )
+            mapWorkInfoToBackupState(
+                latestUploadInfo = latestUploadInfo,
+                latestReportableTerminalInfo = latestReportableTerminalInfo,
+                pendingCount = pendingCount,
+                failedCount = failedCount,
+            )
+        }
+            .distinctUntilChanged()
+            .onEach { state -> _backupState.value = state }
+    }
+
+    /**
      * Schedules a sync for all selected folders.
      *
      * Enqueues [LibrarySyncWorker] and proactively primes thumbnail backfill.
@@ -165,6 +203,118 @@ class SyncOrchestrator(
      */
     fun requestSyncNow() {
         enqueueLibrarySync(existingWorkPolicy = ExistingWorkPolicy.KEEP)
+    }
+
+    /**
+     * Triggers a combined manual sync (download + local detect + upload).
+     */
+    fun requestCombinedSyncNow() {
+        requestSyncNow()
+        LocalMediaDetectorWorker.enqueue(
+            context = context,
+            manualTrigger = true,
+            initialDelaySeconds = 0,
+            policy = ExistingWorkPolicy.REPLACE,
+        )
+        MediaUploadWorker.enqueueNow(
+            context = context,
+            manualTrigger = true,
+        )
+    }
+
+    /**
+     * Applies periodic backup scheduling from current policy.
+     */
+    fun applyBackupScheduling(policy: BackupPolicy) {
+        workManager.cancelUniqueWork(BackupScheduledKickWorker.WORK_NAME)
+        workManager.cancelUniqueWork(LocalMediaDetectorWorker.PERIODIC_WORK_NAME)
+
+        if (!policy.enabled) return
+        if (!policy.backupRootSelectedByUser) return
+        if (policy.syncMode == BackupSyncMode.MANUAL_ONLY) return
+
+        if (policy.autoUploadNewMedia) {
+            LocalMediaDetectorWorker.schedulePeriodic(context = context, intervalHours = DETECTOR_INTERVAL_HOURS)
+            // Launch pass to pick up recent captures near app open.
+            LocalMediaDetectorWorker.enqueue(
+                context = context,
+                manualTrigger = false,
+                initialDelaySeconds = 0,
+                policy = ExistingWorkPolicy.REPLACE,
+            )
+        }
+
+        val periodicRequest = when (policy.syncMode) {
+            BackupSyncMode.SCHEDULED -> {
+                val intervalHours = when (policy.scheduleType) {
+                    BackupScheduleType.INTERVAL_HOURS -> policy.scheduleIntervalHours.coerceIn(2, 24).toLong()
+                    BackupScheduleType.DAILY_TIME -> 24L
+                }
+                val builder = PeriodicWorkRequestBuilder<BackupScheduledKickWorker>(
+                    intervalHours,
+                    TimeUnit.HOURS,
+                )
+                if (policy.scheduleType == BackupScheduleType.DAILY_TIME) {
+                    val initialDelayMs = computeDelayUntilDailyTime(
+                        hour = policy.dailyHour,
+                        minute = policy.dailyMinute,
+                    )
+                    builder.setInitialDelay(initialDelayMs, TimeUnit.MILLISECONDS)
+                }
+                builder
+                    .setConstraints(createBackupConstraints(policy))
+                    .setBackoffCriteria(
+                        BackoffPolicy.EXPONENTIAL,
+                        30,
+                        TimeUnit.SECONDS,
+                    )
+                    .build()
+            }
+
+            BackupSyncMode.WHEN_CHARGING -> {
+                PeriodicWorkRequestBuilder<BackupScheduledKickWorker>(
+                    1L,
+                    TimeUnit.HOURS,
+                )
+                    .setConstraints(createBackupConstraints(policy))
+                    .setBackoffCriteria(
+                        BackoffPolicy.EXPONENTIAL,
+                        30,
+                        TimeUnit.SECONDS,
+                    )
+                    .build()
+            }
+
+            BackupSyncMode.MANUAL_ONLY -> return
+        }
+
+        workManager.enqueueUniquePeriodicWork(
+            BackupScheduledKickWorker.WORK_NAME,
+            ExistingPeriodicWorkPolicy.UPDATE,
+            periodicRequest,
+        )
+    }
+
+    /**
+     * Enqueues upload worker with standard debounce.
+     */
+    fun enqueueDebouncedUpload(manualTrigger: Boolean = false) {
+        MediaUploadWorker.enqueueDebounced(
+            context = context,
+            manualTrigger = manualTrigger,
+        )
+    }
+
+    /**
+     * Launch-triggered detector pass used for auto-upload pickup.
+     */
+    fun kickBackupDetectorOnLaunch() {
+        LocalMediaDetectorWorker.enqueue(
+            context = context,
+            manualTrigger = false,
+            initialDelaySeconds = 0,
+            policy = ExistingWorkPolicy.REPLACE,
+        )
     }
 
     /**
@@ -301,7 +451,12 @@ class SyncOrchestrator(
         workManager.cancelUniqueWork(LibrarySyncWorker.WORK_NAME)
         workManager.cancelUniqueWork(ThumbnailWorker.WORK_NAME)
         workManager.cancelUniqueWork(AutoSyncKickWorker.WORK_NAME)
+        workManager.cancelUniqueWork(MediaUploadWorker.WORK_NAME)
+        workManager.cancelUniqueWork(LocalMediaDetectorWorker.WORK_NAME)
+        workManager.cancelUniqueWork(LocalMediaDetectorWorker.PERIODIC_WORK_NAME)
+        workManager.cancelUniqueWork(BackupScheduledKickWorker.WORK_NAME)
         _syncState.value = SyncState.Idle
+        _backupState.value = BackupSyncState()
     }
 
     /**
@@ -403,11 +558,67 @@ class SyncOrchestrator(
         }
     }
 
+    private fun mapWorkInfoToBackupState(
+        latestUploadInfo: WorkInfo?,
+        latestReportableTerminalInfo: WorkInfo?,
+        pendingCount: Int,
+        failedCount: Int,
+    ): BackupSyncState {
+        val uploadState = latestUploadInfo?.state
+        val runState = when {
+            uploadState == WorkInfo.State.RUNNING ||
+                uploadState == WorkInfo.State.ENQUEUED ||
+                uploadState == WorkInfo.State.BLOCKED -> BackupRunState.RUNNING
+            uploadState == WorkInfo.State.FAILED -> BackupRunState.FAILED
+            uploadState == WorkInfo.State.SUCCEEDED && pendingCount == 0 && failedCount == 0 -> BackupRunState.COMPLETED
+            failedCount > 0 -> BackupRunState.FAILED
+            pendingCount > 0 -> BackupRunState.RUNNING
+            else -> BackupRunState.IDLE
+        }
+
+        val terminalOutput = latestReportableTerminalInfo?.outputData
+        val lastRunFailedCount = terminalOutput?.getInt(MediaUploadWorker.KEY_FAILED_COUNT, 0) ?: 0
+        val lastRunResult = when (latestReportableTerminalInfo?.state) {
+            WorkInfo.State.SUCCEEDED -> if (lastRunFailedCount > 0) BackupRunState.FAILED else BackupRunState.COMPLETED
+            WorkInfo.State.FAILED -> BackupRunState.FAILED
+            WorkInfo.State.CANCELLED -> BackupRunState.IDLE
+            else -> BackupRunState.IDLE
+        }
+
+        val lastError = latestUploadInfo?.outputData?.getString(MediaUploadWorker.KEY_ERROR)
+            ?: terminalOutput?.getString(MediaUploadWorker.KEY_ERROR)
+        return BackupSyncState(
+            runState = runState,
+            pendingCount = pendingCount,
+            failedCount = failedCount,
+            lastError = lastError,
+            hasLastRun = latestReportableTerminalInfo != null,
+            lastRunResult = lastRunResult,
+            lastRunUploadedCount = terminalOutput?.getInt(MediaUploadWorker.KEY_UPLOADED_COUNT, 0) ?: 0,
+            lastRunSkippedCount = terminalOutput?.getInt(MediaUploadWorker.KEY_SKIPPED_COUNT, 0) ?: 0,
+            lastRunDeletedCount = terminalOutput?.getInt(MediaUploadWorker.KEY_DELETED_COUNT, 0) ?: 0,
+            lastRunFailedCount = lastRunFailedCount,
+            lastRunProcessedCount = terminalOutput?.getInt(MediaUploadWorker.KEY_PROCESSED_COUNT, 0) ?: 0,
+            lastRunFinishedAt = terminalOutput?.getLong(MediaUploadWorker.KEY_FINISHED_AT, 0L)
+                ?.takeIf { it > 0L },
+        )
+    }
+
     private fun latestInfoForWorker(infos: List<WorkInfo>, workerTag: String): WorkInfo? {
         return infos
             .asReversed()
             .firstOrNull { info -> info.tags.contains(workerTag) }
             ?: infos.lastOrNull()
+    }
+
+    private fun latestReportableTerminalInfoForWorker(infos: List<WorkInfo>, workerTag: String): WorkInfo? {
+        return infos
+            .asReversed()
+            .firstOrNull { info ->
+                info.tags.contains(workerTag) &&
+                    info.state.isFinished &&
+                    info.outputData.getBoolean(MediaUploadWorker.KEY_REPORTABLE_RUN, true)
+            }
     }
 
     private fun createLibrarySyncRequest(constraints: Constraints) =
@@ -447,6 +658,32 @@ class SyncOrchestrator(
             )
             .build()
 
+    private fun createBackupConstraints(policy: BackupPolicy): Constraints {
+        val requiresCharging = policy.syncMode == BackupSyncMode.WHEN_CHARGING ||
+            policy.powerPolicy == com.imagenext.core.model.BackupPowerPolicy.REQUIRE_CHARGING
+        val requiresIdle = policy.powerPolicy == com.imagenext.core.model.BackupPowerPolicy.REQUIRE_DEVICE_IDLE
+
+        val networkType = when (policy.networkPolicy) {
+            com.imagenext.core.model.BackupNetworkPolicy.WIFI_ONLY -> NetworkType.UNMETERED
+            com.imagenext.core.model.BackupNetworkPolicy.WIFI_OR_MOBILE -> NetworkType.CONNECTED
+        }
+
+        val builder = Constraints.Builder()
+            .setRequiredNetworkType(networkType)
+            .setRequiresCharging(requiresCharging)
+        builder.setRequiresDeviceIdle(requiresIdle)
+        return builder.build()
+    }
+
+    private fun computeDelayUntilDailyTime(hour: Int, minute: Int): Long {
+        val now = ZonedDateTime.now()
+        var next = now.withHour(hour.coerceIn(0, 23)).withMinute(minute.coerceIn(0, 59))
+            .withSecond(0)
+            .withNano(0)
+        if (!next.isAfter(now)) next = next.plusDays(1)
+        return Duration.between(now, next).toMillis().coerceAtLeast(0L)
+    }
+
     private fun logPerf(message: String) {
         Log.d(PERF_TAG, message)
     }
@@ -467,6 +704,7 @@ class SyncOrchestrator(
         const val PERF_TAG = "ImageNextPerf"
         const val TRANSIENT_ERROR_UNREACHABLE = "unreachable"
         const val AUTO_SYNC_INTERVAL_MINUTES = 15L
+        const val DETECTOR_INTERVAL_HOURS = 1L
         const val SYNC_PREFS_NAME = "sync_orchestrator_prefs"
         const val KEY_VIDEO_SKIPPED_REQUEUE_V1_APPLIED = "video_skipped_requeue_v1_applied"
         const val KEY_NO_FULL_PHOTO_CACHE_V1_APPLIED = "no_full_photo_cache_v1_applied"

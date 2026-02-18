@@ -25,6 +25,9 @@ dependencies {
     implementation(project(":core:security"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.documentfile)
+    implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.paging.runtime)
     testImplementation(libs.junit)
 }

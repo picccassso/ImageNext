@@ -7,7 +7,10 @@ import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import java.io.InputStream
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.IOException
@@ -38,6 +41,12 @@ class WebDavClient(
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 ) {
+
+    /** Remote metadata returned by lightweight HEAD checks. */
+    data class RemoteFileInfo(
+        val size: Long?,
+        val etag: String?,
+    )
 
     /** Result type for WebDAV operations. */
     sealed interface WebDavResult<out T> {
@@ -240,6 +249,175 @@ class WebDavClient(
             exceptionError("Secure connection failed.", e)
         } catch (e: IOException) {
             exceptionError("Failed to list media files: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Ensures a target folder exists by issuing MKCOL for each missing path segment.
+     */
+    fun ensureFolderPath(
+        serverUrl: String,
+        loginName: String,
+        appPassword: String,
+        folderPath: String,
+    ): WebDavResult<Unit> {
+        val clean = folderPath.trim().trim('/').takeIf { it.isNotBlank() } ?: return WebDavResult.Success(Unit)
+        val segments = clean.split('/').filter { it.isNotBlank() }
+        var current = ""
+
+        return try {
+            for (segment in segments) {
+                current = "$current/$segment"
+                val request = Request.Builder()
+                    .url(buildWebDavUrl(serverUrl, loginName, current))
+                    .method("MKCOL", null)
+                    .header("Authorization", Credentials.basic(loginName, appPassword))
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    // 201 created, 405 already exists, 301/302 redirected.
+                    if (response.code !in setOf(201, 301, 302, 405)) {
+                        return httpError(
+                            message = "Failed to ensure folder (HTTP ${response.code}).",
+                            statusCode = response.code,
+                        )
+                    }
+                }
+            }
+            WebDavResult.Success(Unit)
+        } catch (e: UnknownHostException) {
+            exceptionError("Server not found.", e)
+        } catch (e: SocketTimeoutException) {
+            exceptionError("Connection timed out.", e)
+        } catch (e: SSLException) {
+            exceptionError("Secure connection failed.", e)
+        } catch (e: IOException) {
+            exceptionError("Failed to ensure folder path: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Reads remote metadata for a file path.
+     * Returns Success(null) when the file does not exist.
+     */
+    fun headFile(
+        serverUrl: String,
+        loginName: String,
+        appPassword: String,
+        remotePath: String,
+    ): WebDavResult<RemoteFileInfo?> {
+        val request = Request.Builder()
+            .url(buildWebDavUrl(serverUrl, loginName, remotePath))
+            .head()
+            .header("Authorization", Credentials.basic(loginName, appPassword))
+            .build()
+
+        return try {
+            client.newCall(request).execute().use { response ->
+                when (response.code) {
+                    200 -> {
+                        val size = response.header("Content-Length")?.toLongOrNull()
+                        val etag = response.header("ETag")?.trim('"')
+                        WebDavResult.Success(RemoteFileInfo(size = size, etag = etag))
+                    }
+                    404 -> WebDavResult.Success(null)
+                    else -> httpError(
+                        message = "Failed to inspect remote file (HTTP ${response.code}).",
+                        statusCode = response.code,
+                    )
+                }
+            }
+        } catch (e: UnknownHostException) {
+            exceptionError("Server not found.", e)
+        } catch (e: SocketTimeoutException) {
+            exceptionError("Connection timed out.", e)
+        } catch (e: SSLException) {
+            exceptionError("Secure connection failed.", e)
+        } catch (e: IOException) {
+            exceptionError("Failed to inspect remote file: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Uploads file content to a remote path via WebDAV PUT.
+     */
+    fun putFile(
+        serverUrl: String,
+        loginName: String,
+        appPassword: String,
+        remotePath: String,
+        contentType: String?,
+        contentLength: Long?,
+        inputStreamProvider: () -> InputStream,
+    ): WebDavResult<Unit> {
+        val request = Request.Builder()
+            .url(buildWebDavUrl(serverUrl, loginName, remotePath))
+            .put(
+                InputStreamRequestBody(
+                    mediaType = contentType?.toMediaType(),
+                    contentLength = contentLength,
+                    inputStreamProvider = inputStreamProvider,
+                )
+            )
+            .header("Authorization", Credentials.basic(loginName, appPassword))
+            .build()
+
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (response.code == 201 || response.code == 204) {
+                    WebDavResult.Success(Unit)
+                } else {
+                    httpError(
+                        message = "Failed to upload file (HTTP ${response.code}).",
+                        statusCode = response.code,
+                    )
+                }
+            }
+        } catch (e: UnknownHostException) {
+            exceptionError("Server not found.", e)
+        } catch (e: SocketTimeoutException) {
+            exceptionError("Connection timed out.", e)
+        } catch (e: SSLException) {
+            exceptionError("Secure connection failed.", e)
+        } catch (e: IOException) {
+            exceptionError("Failed to upload file: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Deletes a remote file path via WebDAV DELETE.
+     * Missing files are treated as success.
+     */
+    fun deleteFile(
+        serverUrl: String,
+        loginName: String,
+        appPassword: String,
+        remotePath: String,
+    ): WebDavResult<Unit> {
+        val request = Request.Builder()
+            .url(buildWebDavUrl(serverUrl, loginName, remotePath))
+            .delete()
+            .header("Authorization", Credentials.basic(loginName, appPassword))
+            .build()
+
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (response.code in setOf(200, 202, 204, 404)) {
+                    WebDavResult.Success(Unit)
+                } else {
+                    httpError(
+                        message = "Failed to delete file (HTTP ${response.code}).",
+                        statusCode = response.code,
+                    )
+                }
+            }
+        } catch (e: UnknownHostException) {
+            exceptionError("Server not found.", e)
+        } catch (e: SocketTimeoutException) {
+            exceptionError("Connection timed out.", e)
+        } catch (e: SSLException) {
+            exceptionError("Secure connection failed.", e)
+        } catch (e: IOException) {
+            exceptionError("Failed to delete file: ${e.message}", e)
         }
     }
 
@@ -679,5 +857,23 @@ class WebDavClient(
             DateTimeFormatter.ofPattern("yyyyMMdd", Locale.US),
             DateTimeFormatter.ISO_LOCAL_DATE,
         )
+    }
+}
+
+private class InputStreamRequestBody(
+    private val mediaType: okhttp3.MediaType?,
+    private val contentLength: Long?,
+    private val inputStreamProvider: () -> InputStream,
+) : RequestBody() {
+    override fun contentType() = mediaType
+
+    override fun contentLength(): Long = contentLength ?: -1L
+
+    override fun writeTo(sink: BufferedSink) {
+        inputStreamProvider().use { input ->
+            val output = sink.outputStream()
+            input.copyTo(output)
+            output.flush()
+        }
     }
 }

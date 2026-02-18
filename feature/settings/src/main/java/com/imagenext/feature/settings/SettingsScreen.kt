@@ -1,9 +1,12 @@
 package com.imagenext.feature.settings
 
 import android.app.Activity
+import android.os.Build
 import android.content.pm.PackageManager
 import android.hardware.biometrics.BiometricPrompt
 import android.os.CancellationSignal
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -26,6 +29,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.imagenext.core.model.BackupDeletePolicy
+import com.imagenext.core.model.BackupNetworkPolicy
+import com.imagenext.core.model.BackupPowerPolicy
+import com.imagenext.core.model.BackupScheduleType
+import com.imagenext.core.model.BackupSourceScope
+import com.imagenext.core.model.BackupSyncMode
+import com.imagenext.core.model.BackupUploadStructure
+import com.imagenext.core.model.BackupRunState
 import com.imagenext.core.model.SyncState
 import com.imagenext.core.security.LockMethod
 import com.imagenext.designsystem.ImageNextSurface
@@ -44,6 +55,28 @@ fun SettingsScreen(
     var showDisablePinDialog by remember { mutableStateOf(false) }
     var disablePin by remember { mutableStateOf("") }
     var disablePinError by remember { mutableStateOf<String?>(null) }
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        val granted = result.values.any { it }
+        viewModel.onMediaPermissionResult(granted)
+    }
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri != null) {
+            val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+            } catch (_: SecurityException) {
+                // Permission persistence may be unavailable on some providers.
+            }
+            val displayName = android.net.Uri.decode(uri.lastPathSegment.orEmpty())
+                .substringAfterLast(':')
+            viewModel.addLocalBackupFolder(uri.toString(), displayName)
+        }
+    }
 
     fun openDisablePinDialog() {
         disablePin = ""
@@ -165,6 +198,390 @@ fun SettingsScreen(
                                 Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("Retry sync", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // ── Backup Section ──
+                SectionHeader(text = "Backup")
+                Surface(
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Enable Nextcloud backup",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = "Status: ${backupRunStateLabel(uiState.backupSyncState.runState)} · pending ${uiState.backupSyncState.pendingCount} · failed ${uiState.backupSyncState.failedCount}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                val lastRunSummary = backupLastRunSummary(uiState.backupSyncState)
+                                if (lastRunSummary != null) {
+                                    Text(
+                                        text = lastRunSummary,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = uiState.backupPolicy.enabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && !uiState.backupPolicy.backupRootSelectedByUser) {
+                                        viewModel.openBackupFolderPicker()
+                                        return@Switch
+                                    }
+                                    val requiresMediaPermission = enabled &&
+                                        uiState.backupPolicy.sourceScope == BackupSourceScope.FULL_LIBRARY &&
+                                        !uiState.hasMediaPermission
+                                    if (requiresMediaPermission) {
+                                        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            arrayOf(
+                                                android.Manifest.permission.READ_MEDIA_IMAGES,
+                                                android.Manifest.permission.READ_MEDIA_VIDEO,
+                                            )
+                                        } else {
+                                            arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                                        }
+                                        mediaPermissionLauncher.launch(permissions)
+                                    } else {
+                                        viewModel.updateBackupPolicy { it.copy(enabled = enabled) }
+                                    }
+                                },
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        BackupDestinationPicker(
+                            value = uiState.backupPolicy.backupRoot,
+                            isSelectedByUser = uiState.backupPolicy.backupRootSelectedByUser,
+                            needsReselection = uiState.backupRootNeedsReselection,
+                            onOpenPicker = { viewModel.openBackupFolderPicker() },
+                        )
+                        if (uiState.backupRootNeedsReselection) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = if (uiState.backupPolicy.backupRootSelectedByUser) {
+                                    "Current backup folder was not found on server. Please select a new folder."
+                                } else {
+                                    "Select a backup destination to enable backup."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            TextButton(
+                                onClick = { viewModel.openBackupFolderPicker() },
+                            ) {
+                                Text("Select backup folder")
+                            }
+                        }
+
+                        if (uiState.backupPolicy.enabled) {
+                            if (
+                                uiState.backupPolicy.sourceScope == BackupSourceScope.FULL_LIBRARY &&
+                                !uiState.hasMediaPermission
+                            ) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            arrayOf(
+                                                android.Manifest.permission.READ_MEDIA_IMAGES,
+                                                android.Manifest.permission.READ_MEDIA_VIDEO,
+                                            )
+                                        } else {
+                                            arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                                        }
+                                        mediaPermissionLauncher.launch(permissions)
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Grant media permission")
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Source",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                BackupSourceScope.entries.forEach { scope ->
+                                    FilterChip(
+                                        selected = uiState.backupPolicy.sourceScope == scope,
+                                        onClick = { viewModel.updateBackupPolicy { it.copy(sourceScope = scope) } },
+                                        label = { Text(sourceScopeLabel(scope)) },
+                                    )
+                                }
+                            }
+
+                            if (uiState.backupPolicy.sourceScope == BackupSourceScope.SELECTED_FOLDERS) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Button(
+                                    onClick = { folderPickerLauncher.launch(null) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Add folder to backup")
+                                }
+                                LocalBackupFolderPicker(
+                                    selectedFolders = uiState.selectedLocalFolders,
+                                    onRemoveFolder = { treeUri ->
+                                        try {
+                                            context.contentResolver.releasePersistableUriPermission(
+                                                android.net.Uri.parse(treeUri),
+                                                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                                            )
+                                        } catch (_: SecurityException) {
+                                            // Ignore if provider doesn't support permission release.
+                                        }
+                                        viewModel.removeLocalBackupFolder(treeUri)
+                                    },
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Upload structure",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                BackupUploadStructure.entries.forEach { structure ->
+                                    FilterChip(
+                                        selected = uiState.backupPolicy.uploadStructure == structure,
+                                        onClick = {
+                                            viewModel.updateBackupPolicy {
+                                                it.copy(uploadStructure = structure)
+                                            }
+                                        },
+                                        label = { Text(uploadStructureLabel(structure)) },
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Sync mode",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                BackupSyncMode.entries.forEach { mode ->
+                                    FilterChip(
+                                        selected = uiState.backupPolicy.syncMode == mode,
+                                        onClick = { viewModel.updateBackupPolicy { it.copy(syncMode = mode) } },
+                                        label = { Text(modeLabel(mode)) },
+                                    )
+                                }
+                            }
+
+                            if (uiState.backupPolicy.syncMode == BackupSyncMode.SCHEDULED) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    BackupScheduleType.entries.forEach { type ->
+                                        FilterChip(
+                                            selected = uiState.backupPolicy.scheduleType == type,
+                                            onClick = { viewModel.updateBackupPolicy { it.copy(scheduleType = type) } },
+                                            label = { Text(scheduleTypeLabel(type)) },
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                if (uiState.backupPolicy.scheduleType == BackupScheduleType.INTERVAL_HOURS) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        listOf(2, 4, 6, 12, 24).forEach { hours ->
+                                            FilterChip(
+                                                selected = uiState.backupPolicy.scheduleIntervalHours == hours,
+                                                onClick = {
+                                                    viewModel.updateBackupPolicy {
+                                                        it.copy(scheduleIntervalHours = hours)
+                                                    }
+                                                },
+                                                label = { Text("${hours}h") },
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedTextField(
+                                            value = uiState.backupPolicy.dailyHour.toString(),
+                                            onValueChange = { raw ->
+                                                raw.toIntOrNull()?.let { hour ->
+                                                    viewModel.updateBackupPolicy { it.copy(dailyHour = hour.coerceIn(0, 23)) }
+                                                }
+                                            },
+                                            label = { Text("Hour") },
+                                            singleLine = true,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        OutlinedTextField(
+                                            value = uiState.backupPolicy.dailyMinute.toString(),
+                                            onValueChange = { raw ->
+                                                raw.toIntOrNull()?.let { minute ->
+                                                    viewModel.updateBackupPolicy { it.copy(dailyMinute = minute.coerceIn(0, 59)) }
+                                                }
+                                            },
+                                            label = { Text("Minute") },
+                                            singleLine = true,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Network",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                BackupNetworkPolicy.entries.forEach { policy ->
+                                    FilterChip(
+                                        selected = uiState.backupPolicy.networkPolicy == policy,
+                                        onClick = {
+                                            viewModel.updateBackupPolicy { it.copy(networkPolicy = policy) }
+                                        },
+                                        label = { Text(networkPolicyLabel(policy)) },
+                                    )
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text("Allow roaming", style = MaterialTheme.typography.bodySmall)
+                                Switch(
+                                    checked = uiState.backupPolicy.allowRoaming,
+                                    onCheckedChange = { next ->
+                                        viewModel.updateBackupPolicy { it.copy(allowRoaming = next) }
+                                    },
+                                )
+                            }
+                            if (!uiState.backupPolicy.autoSelectBackupRoot) {
+                                Text(
+                                    text = "Warning: if backup root is not selected for viewing, uploaded media may not appear in timeline.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Power",
+style = MaterialTheme.typography.bodyMedium,
+color = MaterialTheme.colorScheme.onSurface,
+)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                BackupPowerPolicy.entries.forEach { power ->
+                                    FilterChip(
+                                        selected = uiState.backupPolicy.powerPolicy == power,
+                                        onClick = {
+                                            viewModel.updateBackupPolicy { it.copy(powerPolicy = power) }
+                                        },
+                                        label = { Text(powerPolicyLabel(power)) },
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text("Upload photos", style = MaterialTheme.typography.bodySmall)
+                                Switch(
+                                    checked = uiState.backupPolicy.mediaTypes.uploadPhotos,
+                                    onCheckedChange = { next ->
+                                        viewModel.updateBackupPolicy {
+                                            it.copy(mediaTypes = it.mediaTypes.copy(uploadPhotos = next))
+                                        }
+                                    },
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text("Upload videos", style = MaterialTheme.typography.bodySmall)
+                                Switch(
+                                    checked = uiState.backupPolicy.mediaTypes.uploadVideos,
+                                    onCheckedChange = { next ->
+                                        viewModel.updateBackupPolicy {
+                                            it.copy(mediaTypes = it.mediaTypes.copy(uploadVideos = next))
+                                        }
+                                    },
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text("Auto-upload new files", style = MaterialTheme.typography.bodySmall)
+                                Switch(
+                                    checked = uiState.backupPolicy.autoUploadNewMedia,
+                                    onCheckedChange = { next ->
+                                        viewModel.updateBackupPolicy { it.copy(autoUploadNewMedia = next) }
+                                    },
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text("Auto-select backup root", style = MaterialTheme.typography.bodySmall)
+                                Switch(
+                                    checked = uiState.backupPolicy.autoSelectBackupRoot,
+                                    onCheckedChange = { next ->
+                                        viewModel.updateBackupPolicy { it.copy(autoSelectBackupRoot = next) }
+                                    },
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Delete behavior",
+style = MaterialTheme.typography.bodyMedium,
+color = MaterialTheme.colorScheme.onSurface,
+)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                BackupDeletePolicy.entries.forEach { deletePolicy ->
+                                    FilterChip(
+                                        selected = uiState.backupPolicy.deletePolicy == deletePolicy,
+                                        onClick = {
+                                            viewModel.updateBackupPolicy { it.copy(deletePolicy = deletePolicy) }
+                                        },
+                                        label = { Text(deletePolicyLabel(deletePolicy)) },
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = { viewModel.syncNowCombined() },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Sync now (download + upload)")
                             }
                         }
                     }
@@ -445,6 +862,83 @@ fun SettingsScreen(
             shape = RoundedCornerShape(16.dp),
         )
     }
+
+    if (uiState.isBackupFolderPickerVisible) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissBackupFolderPicker() },
+            title = { Text("Select backup destination") },
+            text = {
+                Column {
+                    if (uiState.isBackupFolderPickerLoading) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text("Loading folders...")
+                        }
+                    } else if (!uiState.backupFolderPickerError.isNullOrBlank()) {
+                        Text(
+                            text = uiState.backupFolderPickerError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = { viewModel.refreshBackupFolderOptions() }) {
+                            Text("Retry")
+                        }
+                    } else if (uiState.backupFolderOptions.isEmpty()) {
+                        Text(
+                            text = "No folders found. Try refreshing.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = { viewModel.refreshBackupFolderOptions() }) {
+                            Text("Refresh")
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 360.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            uiState.backupFolderOptions.forEach { option ->
+                                val isSelected = option.remotePath == uiState.backupPolicy.backupRoot
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        viewModel.selectBackupRoot(
+                                            folderRemotePath = option.remotePath,
+                                            displayName = option.displayName,
+                                        )
+                                    },
+                                    label = {
+                                        Column {
+                                            Text(option.displayName)
+                                            Text(
+                                                option.remotePath,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.dismissBackupFolderPicker() }) {
+                    Text("Close")
+                }
+            },
+            dismissButton = null,
+            containerColor = ImageNextSurface,
+            shape = RoundedCornerShape(16.dp),
+        )
+    }
 }
 
 @Composable
@@ -554,4 +1048,59 @@ private fun connectionStatusLabel(connectionStatus: ConnectionStatus): String = 
 private fun connectionStatusIconTint(connectionStatus: ConnectionStatus): Color = when (connectionStatus) {
     ConnectionStatus.CONNECTED -> Color(0xFF2E7D32)
     ConnectionStatus.NOT_CONNECTED -> Color(0xFFC62828)
+}
+
+private fun backupRunStateLabel(state: BackupRunState): String = when (state) {
+    BackupRunState.IDLE -> "Idle"
+    BackupRunState.RUNNING -> "Running"
+    BackupRunState.FAILED -> "Failed"
+    BackupRunState.COMPLETED -> "Completed"
+}
+
+private fun backupLastRunSummary(state: com.imagenext.core.model.BackupSyncState): String? {
+    if (!state.hasLastRun) return null
+    val resultLabel = when (state.lastRunResult) {
+        BackupRunState.COMPLETED -> "Last run completed"
+        BackupRunState.FAILED -> "Last run failed"
+        BackupRunState.RUNNING -> "Last run running"
+        BackupRunState.IDLE -> "Last run ended"
+    }
+    return "$resultLabel · added ${state.lastRunUploadedCount} · skipped ${state.lastRunSkippedCount} · deleted ${state.lastRunDeletedCount} · failed ${state.lastRunFailedCount}"
+}
+
+private fun modeLabel(mode: BackupSyncMode): String = when (mode) {
+    BackupSyncMode.MANUAL_ONLY -> "Manual"
+    BackupSyncMode.SCHEDULED -> "Scheduled"
+    BackupSyncMode.WHEN_CHARGING -> "Charging"
+}
+
+private fun scheduleTypeLabel(type: BackupScheduleType): String = when (type) {
+    BackupScheduleType.INTERVAL_HOURS -> "Every X hours"
+    BackupScheduleType.DAILY_TIME -> "Specific time"
+}
+
+private fun networkPolicyLabel(policy: BackupNetworkPolicy): String = when (policy) {
+    BackupNetworkPolicy.WIFI_ONLY -> "WiFi only"
+    BackupNetworkPolicy.WIFI_OR_MOBILE -> "WiFi/Mobile"
+}
+
+private fun powerPolicyLabel(policy: BackupPowerPolicy): String = when (policy) {
+    BackupPowerPolicy.REQUIRE_CHARGING -> "Charging"
+    BackupPowerPolicy.REQUIRE_DEVICE_IDLE -> "Idle"
+    BackupPowerPolicy.NONE -> "No requirement"
+}
+
+private fun deletePolicyLabel(policy: BackupDeletePolicy): String = when (policy) {
+    BackupDeletePolicy.APPEND_ONLY -> "Never delete remote"
+    BackupDeletePolicy.MIRROR_DELETE -> "Mirror local deletes"
+}
+
+private fun sourceScopeLabel(scope: BackupSourceScope): String = when (scope) {
+    BackupSourceScope.FULL_LIBRARY -> "Full library"
+    BackupSourceScope.SELECTED_FOLDERS -> "Selected folders"
+}
+
+private fun uploadStructureLabel(structure: BackupUploadStructure): String = when (structure) {
+    BackupUploadStructure.FLAT_FOLDER -> "Flat folder"
+    BackupUploadStructure.YEAR_MONTH_FOLDERS -> "Year/Month folders"
 }

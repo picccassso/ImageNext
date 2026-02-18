@@ -81,6 +81,7 @@ class PhotosViewModel(
         onPhotosForegrounded()
         triggerThumbnailBackfillIfNeeded()
         enableAutoSync()
+        triggerBackupDetectorOnLaunch()
     }
 
     private fun observeSync() {
@@ -111,6 +112,10 @@ class PhotosViewModel(
 
     private fun enableAutoSync() {
         syncOrchestrator.ensureAutoSyncScheduled()
+    }
+
+    private fun triggerBackupDetectorOnLaunch() {
+        syncOrchestrator.kickBackupDetectorOnLaunch()
     }
 
     private fun observeAlbumPicker() {

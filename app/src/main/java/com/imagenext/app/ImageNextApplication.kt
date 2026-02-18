@@ -2,14 +2,19 @@ package com.imagenext.app
 
 import android.app.Application
 import com.imagenext.core.data.AlbumRepository
+import com.imagenext.core.data.BackupPolicyRepository
 import com.imagenext.core.data.FolderRepositoryImpl
+import com.imagenext.core.data.LocalMediaDetector
 import com.imagenext.core.data.MediaRepositoryImpl
 import com.imagenext.core.data.TimelineRepository
 import com.imagenext.core.data.ViewerRepository
 import com.imagenext.core.database.AppDatabase
 import com.imagenext.core.database.dao.AlbumDao
 import com.imagenext.core.database.dao.FolderDao
+import com.imagenext.core.database.dao.LocalBackupAlbumDao
+import com.imagenext.core.database.dao.LocalBackupFolderDao
 import com.imagenext.core.database.dao.MediaDao
+import com.imagenext.core.database.dao.UploadQueueDao
 import com.imagenext.core.network.auth.LoginFlowClient
 import com.imagenext.core.network.auth.NextcloudAuthApi
 import com.imagenext.core.network.webdav.WebDavClient
@@ -19,7 +24,9 @@ import com.imagenext.core.security.SessionRepository
 import com.imagenext.core.security.SessionRepositoryImpl
 import com.imagenext.core.security.AppLockManager
 import com.imagenext.core.sync.SyncDependencies
+import com.imagenext.core.sync.MediaUploadWorker
 import com.imagenext.core.sync.SyncOrchestrator
+import kotlinx.coroutines.runBlocking
 
 /**
  * Application entrypoint.
@@ -82,6 +89,21 @@ class ImageNextApplication : Application() {
         database.mediaDao()
     }
 
+    /** Upload queue DAO for backup pipeline. */
+    val uploadQueueDao: UploadQueueDao by lazy {
+        database.uploadQueueDao()
+    }
+
+    /** Local backup album selection DAO. */
+    val localBackupAlbumDao: LocalBackupAlbumDao by lazy {
+        database.localBackupAlbumDao()
+    }
+
+    /** Local backup folder selection DAO (SAF tree URIs). */
+    val localBackupFolderDao: LocalBackupFolderDao by lazy {
+        database.localBackupFolderDao()
+    }
+
     /** Folder repository for discovery and selection management. */
     val folderRepository: FolderRepositoryImpl by lazy {
         FolderRepositoryImpl(webDavClient, folderDao)
@@ -110,6 +132,16 @@ class ImageNextApplication : Application() {
         TimelineRepository(mediaDao)
     }
 
+    /** Backup policy repository. */
+    val backupPolicyRepository: BackupPolicyRepository by lazy {
+        BackupPolicyRepository(this)
+    }
+
+    /** MediaStore detector for local backup discovery. */
+    val localMediaDetector: LocalMediaDetector by lazy {
+        LocalMediaDetector(this)
+    }
+
     /** Viewer repository for fullscreen viewer data access. */
     val viewerRepository: ViewerRepository by lazy {
         ViewerRepository(
@@ -131,5 +163,9 @@ class ImageNextApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         SyncDependencies.init(sessionRepository)
+        MediaUploadWorker.ensureNotificationChannel(this)
+        runBlocking {
+            syncOrchestrator.applyBackupScheduling(backupPolicyRepository.getPolicy())
+        }
     }
 }

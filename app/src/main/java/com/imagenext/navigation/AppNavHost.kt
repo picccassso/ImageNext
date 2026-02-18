@@ -257,6 +257,8 @@ fun AppNavHost(
                     certificateTrustStore = app.certificateTrustStore,
                     appLockManager = app.appLockManager,
                     database = app.database,
+                    backupPolicyRepository = app.backupPolicyRepository,
+                    localMediaDetector = app.localMediaDetector,
                 ),
             )
             SettingsScreen(
