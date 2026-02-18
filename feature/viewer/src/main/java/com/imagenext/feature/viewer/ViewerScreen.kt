@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -11,9 +12,13 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,7 +34,7 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.PlayArrow
@@ -37,6 +42,8 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +58,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -63,11 +71,17 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -84,16 +98,16 @@ import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.imagenext.core.model.MediaItem
-import com.imagenext.designsystem.ImageNextAccent
 import com.imagenext.designsystem.ImageNextBlack
 import com.imagenext.designsystem.ImageNextWhite
 import com.imagenext.designsystem.Motion
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 
 /** Minimum zoom scale. */
 private const val MIN_SCALE = 1f
@@ -107,6 +121,8 @@ private const val DOUBLE_TAP_SCALE = 3f
 /** Number of pages to prefetch on each side of the current page. */
 private const val PREFETCH_WINDOW = 1
 private const val VIDEO_CONTROLS_AUTO_HIDE_DELAY_MS = 2500L
+private const val METADATA_DISMISS_THRESHOLD_DP = 96f
+private val METADATA_FALLBACK_HEIGHT = 220.dp
 
 @Composable
 fun ViewerScreen(
@@ -163,7 +179,8 @@ fun ViewerScreen(
                 ViewerContent(
                     state = state,
                     onPageChanged = viewModel::onPageChanged,
-                    onToggleMetadata = viewModel::toggleMetadata,
+                    onShowMetadata = viewModel::showMetadata,
+                    onHideMetadata = viewModel::hideMetadata,
                     onBack = onBack,
                 )
             }
@@ -176,7 +193,8 @@ fun ViewerScreen(
 private fun ViewerContent(
     state: ViewerUiState.Content,
     onPageChanged: (Int) -> Unit,
-    onToggleMetadata: () -> Unit,
+    onShowMetadata: () -> Unit,
+    onHideMetadata: () -> Unit,
     onBack: () -> Unit,
 ) {
     val pagerState = rememberPagerState(
@@ -185,7 +203,11 @@ private fun ViewerContent(
     )
     val coroutineScope = rememberCoroutineScope()
     val transitionProgress = remember { Animatable(0f) }
+    val dismissThresholdPx = with(LocalDensity.current) { METADATA_DISMISS_THRESHOLD_DP.dp.toPx() }
+    val density = LocalDensity.current
     var isClosingTransition by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
+    var metadataOverlayHeightPx by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }.collect { page ->
@@ -205,8 +227,35 @@ private fun ViewerContent(
     val transitionRunning by remember {
         derivedStateOf { transitionProgress.value < 1f || isClosingTransition }
     }
+    val metadataOverlayInsetTarget = when {
+        !state.showMetadata -> 0.dp
+        metadataOverlayHeightPx > 0 -> with(density) { metadataOverlayHeightPx.toDp() }
+        else -> METADATA_FALLBACK_HEIGHT
+    }
+    val metadataOverlayInset by animateDpAsState(
+        targetValue = metadataOverlayInsetTarget,
+        animationSpec = tween(
+            durationMillis = Motion.DURATION_MEDIUM_MS,
+            easing = Motion.Easing.Standard,
+        ),
+        label = "metadataOverlayInset",
+    )
+
+    LaunchedEffect(state.showMetadata, showChrome) {
+        if (state.showMetadata || !showChrome) {
+            showMenu = false
+        }
+    }
 
     fun onBackRequested() {
+        if (showMenu) {
+            showMenu = false
+            return
+        }
+        if (state.showMetadata) {
+            onHideMetadata()
+            return
+        }
         if (isClosingTransition) return
         showChrome = false
         isClosingTransition = true
@@ -227,6 +276,14 @@ private fun ViewerContent(
             .drawBehind {
                 drawRect(Color.Black.copy(alpha = transitionProgress.value))
             }
+            .pointerInput(state.showMetadata, dismissThresholdPx) {
+                detectMetadataSwipeGesture(
+                    isMetadataVisible = state.showMetadata,
+                    swipeThresholdPx = dismissThresholdPx,
+                    onShow = onShowMetadata,
+                    onDismiss = onHideMetadata,
+                )
+            }
     ) {
         val transitionModifier = remember(transitionProgress) {
             Modifier.graphicsLayer {
@@ -238,6 +295,7 @@ private fun ViewerContent(
             pagerState = pagerState,
             state = state,
             onTap = {
+                if (state.showMetadata) return@ViewerPager
                 if (!transitionRunning) {
                     showChrome = !showChrome
                 }
@@ -245,7 +303,7 @@ private fun ViewerContent(
             showChrome = showChrome,
             onChromeVisibilityChange = { visible -> showChrome = visible },
             interactionsEnabled = !transitionRunning,
-            modifier = transitionModifier,
+            modifier = transitionModifier.padding(bottom = metadataOverlayInset),
         )
 
         PrefetchLayer(prefetchSources = state.prefetchImageSources)
@@ -254,7 +312,7 @@ private fun ViewerContent(
             derivedStateOf { !isClosingTransition && transitionProgress.value > 0.7f }
         }
         AnimatedVisibility(
-            visible = showChrome && chromeReady,
+            visible = showChrome && chromeReady && !state.showMetadata,
             enter = fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
             exit = fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
         ) {
@@ -278,13 +336,11 @@ private fun ViewerContent(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onToggleMetadata) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = "Toggle metadata",
-                            tint = if (state.showMetadata) ImageNextAccent else ImageNextWhite,
-                        )
-                    }
+                    ViewerOverflowMenu(
+                        expanded = showMenu,
+                        onExpandedChange = { expanded -> showMenu = expanded },
+                        onShowMetadata = onShowMetadata,
+                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = ImageNextBlack.copy(alpha = 0.4f),
@@ -293,12 +349,46 @@ private fun ViewerContent(
         }
 
         AnimatedVisibility(
-            visible = showChrome && state.showMetadata,
+            visible = state.showMetadata,
             enter = fadeIn() + slideInVertically { it / 2 },
             exit = fadeOut() + slideOutVertically { it / 2 },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            MetadataOverlay(mediaItem = state.currentItem)
+            MetadataOverlay(
+                mediaItem = state.currentItem,
+                modifier = Modifier.onSizeChanged { size ->
+                    metadataOverlayHeightPx = size.height
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ViewerOverflowMenu(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onShowMetadata: () -> Unit,
+) {
+    Box {
+        IconButton(onClick = { onExpandedChange(true) }) {
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "Viewer options",
+                tint = ImageNextWhite,
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Details") },
+                onClick = {
+                    onExpandedChange(false)
+                    onShowMetadata()
+                },
+            )
         }
     }
 }
@@ -702,6 +792,7 @@ private fun ZoomableImage(
     val offsetX = remember { Animatable(0f) }
     val offsetY = remember { Animatable(0f) }
     val coroutineScope = rememberCoroutineScope()
+    var containerSize by remember(mediaItem.remotePath) { mutableStateOf(IntSize.Zero) }
 
     LaunchedEffect(mediaItem.remotePath) {
         scale.snapTo(1f)
@@ -729,26 +820,31 @@ private fun ZoomableImage(
             else -> null
         }
     }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        coroutineScope.launch {
+            val newScale = (scale.value * zoomChange).coerceIn(MIN_SCALE, MAX_SCALE)
+            if (newScale > MIN_SCALE) {
+                val maxX = (newScale - 1f) * containerSize.width / 2f
+                val maxY = (newScale - 1f) * containerSize.height / 2f
+                scale.snapTo(newScale)
+                offsetX.snapTo((offsetX.value + panChange.x).coerceIn(-maxX, maxX))
+                offsetY.snapTo((offsetY.value + panChange.y).coerceIn(-maxY, maxY))
+            } else {
+                scale.snapTo(newScale)
+                offsetX.snapTo(0f)
+                offsetY.snapTo(0f)
+            }
+        }
+    }
+
     val interactionModifier = if (interactionsEnabled) {
         Modifier
-            .pointerInput(mediaItem.remotePath) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    val newScale = (scale.value * zoom).coerceIn(MIN_SCALE, MAX_SCALE)
-                    coroutineScope.launch {
-                        if (newScale > MIN_SCALE) {
-                            val maxX = (newScale - 1f) * size.width / 2f
-                            val maxY = (newScale - 1f) * size.height / 2f
-                            scale.snapTo(newScale)
-                            offsetX.snapTo((offsetX.value + pan.x).coerceIn(-maxX, maxX))
-                            offsetY.snapTo((offsetY.value + pan.y).coerceIn(-maxY, maxY))
-                        } else {
-                            scale.snapTo(newScale)
-                            offsetX.snapTo(0f)
-                            offsetY.snapTo(0f)
-                        }
-                    }
-                }
-            }
+            .transformable(
+                state = transformState,
+                enabled = interactionsEnabled,
+                canPan = { scale.value > MIN_SCALE },
+                lockRotationOnZoomPan = true,
+            )
             .pointerInput(mediaItem.remotePath) {
                 detectTapGestures(
                     onTap = { onTap() },
@@ -782,6 +878,7 @@ private fun ZoomableImage(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .onSizeChanged { size -> containerSize = size }
             .then(interactionModifier),
         contentAlignment = Alignment.Center,
     ) {
@@ -853,9 +950,12 @@ private fun buildRemoteImageRequest(
 }
 
 @Composable
-private fun MetadataOverlay(mediaItem: MediaItem) {
+private fun MetadataOverlay(
+    mediaItem: MediaItem,
+    modifier: Modifier = Modifier,
+) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(ImageNextBlack.copy(alpha = 0.6f))
             .padding(20.dp),
@@ -910,6 +1010,60 @@ private fun MetadataField(label: String, value: String) {
             style = MaterialTheme.typography.bodySmall,
         )
     }
+}
+
+private suspend fun PointerInputScope.detectMetadataSwipeGesture(
+    isMetadataVisible: Boolean,
+    swipeThresholdPx: Float,
+    onShow: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    awaitEachGesture {
+        val pointerId = awaitFirstDown(requireUnconsumed = false).id
+        var totalDragX = 0f
+        var totalDragY = 0f
+
+        while (true) {
+            val event = awaitPointerEvent(pass = PointerEventPass.Final)
+            val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+            if (!change.pressed) break
+
+            // Observe only movement that children did not consume so horizontal pager swipes keep priority.
+            val delta = change.positionChange()
+            totalDragX += delta.x
+            totalDragY += delta.y
+
+            if (isMetadataVisible && shouldDismissMetadataOnSwipe(totalDragX, totalDragY, swipeThresholdPx)) {
+                onDismiss()
+                break
+            }
+
+            if (!isMetadataVisible && shouldShowMetadataOnSwipe(totalDragX, totalDragY, swipeThresholdPx)) {
+                onShow()
+                break
+            }
+        }
+    }
+}
+
+internal fun shouldDismissMetadataOnSwipe(
+    totalDragX: Float,
+    totalDragY: Float,
+    dismissThresholdPx: Float,
+): Boolean {
+    if (totalDragY <= 0f) return false
+    if (totalDragY < dismissThresholdPx) return false
+    return abs(totalDragY) > abs(totalDragX)
+}
+
+internal fun shouldShowMetadataOnSwipe(
+    totalDragX: Float,
+    totalDragY: Float,
+    showThresholdPx: Float,
+): Boolean {
+    if (totalDragY >= 0f) return false
+    if (abs(totalDragY) < showThresholdPx) return false
+    return abs(totalDragY) > abs(totalDragX)
 }
 
 private fun formatFileSize(bytes: Long): String {

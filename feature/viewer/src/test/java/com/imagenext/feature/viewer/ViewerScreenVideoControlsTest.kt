@@ -7,6 +7,8 @@ import org.junit.Test
 
 class ViewerScreenVideoControlsTest {
 
+    private val dismissThresholdPx = 120f
+
     @Test
     fun `formatVideoTime handles minute boundaries`() {
         assertEquals("0:00", formatVideoTime(0))
@@ -49,6 +51,94 @@ class ViewerScreenVideoControlsTest {
                 showChrome = true,
                 isPlaying = true,
                 isScrubbing = true,
+            )
+        )
+    }
+
+    @Test
+    fun `shouldDismissMetadataOnSwipe returns true for downward vertical drag above threshold`() {
+        assertTrue(
+            shouldDismissMetadataOnSwipe(
+                totalDragX = 16f,
+                totalDragY = 180f,
+                dismissThresholdPx = dismissThresholdPx,
+            )
+        )
+    }
+
+    @Test
+    fun `shouldDismissMetadataOnSwipe returns false for upward drag`() {
+        assertFalse(
+            shouldDismissMetadataOnSwipe(
+                totalDragX = 10f,
+                totalDragY = -180f,
+                dismissThresholdPx = dismissThresholdPx,
+            )
+        )
+    }
+
+    @Test
+    fun `shouldDismissMetadataOnSwipe returns false when horizontal drag dominates`() {
+        assertFalse(
+            shouldDismissMetadataOnSwipe(
+                totalDragX = 220f,
+                totalDragY = 160f,
+                dismissThresholdPx = dismissThresholdPx,
+            )
+        )
+    }
+
+    @Test
+    fun `shouldDismissMetadataOnSwipe returns false for small downward drag below threshold`() {
+        assertFalse(
+            shouldDismissMetadataOnSwipe(
+                totalDragX = 4f,
+                totalDragY = 90f,
+                dismissThresholdPx = dismissThresholdPx,
+            )
+        )
+    }
+
+    @Test
+    fun `shouldShowMetadataOnSwipe returns true for upward vertical drag above threshold`() {
+        assertTrue(
+            shouldShowMetadataOnSwipe(
+                totalDragX = 12f,
+                totalDragY = -180f,
+                showThresholdPx = dismissThresholdPx,
+            )
+        )
+    }
+
+    @Test
+    fun `shouldShowMetadataOnSwipe returns false for downward drag`() {
+        assertFalse(
+            shouldShowMetadataOnSwipe(
+                totalDragX = 12f,
+                totalDragY = 180f,
+                showThresholdPx = dismissThresholdPx,
+            )
+        )
+    }
+
+    @Test
+    fun `shouldShowMetadataOnSwipe returns false when horizontal drag dominates`() {
+        assertFalse(
+            shouldShowMetadataOnSwipe(
+                totalDragX = 240f,
+                totalDragY = -170f,
+                showThresholdPx = dismissThresholdPx,
+            )
+        )
+    }
+
+    @Test
+    fun `shouldShowMetadataOnSwipe returns false for small upward drag below threshold`() {
+        assertFalse(
+            shouldShowMetadataOnSwipe(
+                totalDragX = 6f,
+                totalDragY = -95f,
+                showThresholdPx = dismissThresholdPx,
             )
         )
     }

@@ -121,7 +121,7 @@ class ViewerViewModelTest {
     }
 
     @Test
-    fun `toggleMetadata flips showMetadata`() = runTest {
+    fun `showMetadata sets showMetadata true`() = runTest {
         val repo = FakeViewerRepository(listOf(mediaItem("/a.jpg")))
         val vm = ViewerViewModel(repo, "/a.jpg")
 
@@ -129,10 +129,21 @@ class ViewerViewModelTest {
 
         assertFalse((vm.uiState.value as ViewerUiState.Content).showMetadata)
 
-        vm.toggleMetadata()
+        vm.showMetadata()
+        assertTrue((vm.uiState.value as ViewerUiState.Content).showMetadata)
+    }
+
+    @Test
+    fun `hideMetadata sets showMetadata false`() = runTest {
+        val repo = FakeViewerRepository(listOf(mediaItem("/a.jpg")))
+        val vm = ViewerViewModel(repo, "/a.jpg")
+
+        advanceUntilIdle()
+
+        vm.showMetadata()
         assertTrue((vm.uiState.value as ViewerUiState.Content).showMetadata)
 
-        vm.toggleMetadata()
+        vm.hideMetadata()
         assertFalse((vm.uiState.value as ViewerUiState.Content).showMetadata)
     }
 
@@ -178,17 +189,36 @@ class ViewerViewModelTest {
     }
 
     @Test
-    fun `stress test - toggle metadata rapidly`() = runTest {
+    fun `stress test - show and hide metadata rapidly`() = runTest {
         val repo = FakeViewerRepository(listOf(mediaItem("/a.jpg")))
         val vm = ViewerViewModel(repo, "/a.jpg")
 
         advanceUntilIdle()
 
-        // Toggle 100 times
-        repeat(100) { vm.toggleMetadata() }
-
-        // Even number of toggles should return to false
+        repeat(100) {
+            vm.showMetadata()
+            vm.hideMetadata()
+        }
         assertFalse((vm.uiState.value as ViewerUiState.Content).showMetadata)
+    }
+
+    @Test
+    fun `metadata visibility persists across page change after showMetadata`() = runTest {
+        val items = listOf(
+            mediaItem("/a.jpg", 3000),
+            mediaItem("/b.jpg", 2000),
+        )
+        val repo = FakeViewerRepository(items)
+        val vm = ViewerViewModel(repo, "/a.jpg")
+
+        advanceUntilIdle()
+
+        vm.showMetadata()
+        vm.onPageChanged(1)
+
+        val state = vm.uiState.value as ViewerUiState.Content
+        assertEquals(1, state.currentIndex)
+        assertTrue(state.showMetadata)
     }
 
     @Test

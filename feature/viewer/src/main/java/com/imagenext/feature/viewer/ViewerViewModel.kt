@@ -62,11 +62,19 @@ class ViewerViewModel(
         }
     }
 
-    /** Toggles the metadata overlay visibility. */
-    fun toggleMetadata() {
+    /** Shows the metadata overlay. */
+    fun showMetadata() {
         val current = _uiState.value
         if (current is ViewerUiState.Content) {
-            _uiState.value = current.copy(showMetadata = !current.showMetadata)
+            _uiState.value = current.copy(showMetadata = true)
+        }
+    }
+
+    /** Hides the metadata overlay. */
+    fun hideMetadata() {
+        val current = _uiState.value
+        if (current is ViewerUiState.Content) {
+            _uiState.value = current.copy(showMetadata = false)
         }
     }
 
