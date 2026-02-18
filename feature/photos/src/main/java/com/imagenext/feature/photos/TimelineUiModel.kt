@@ -19,7 +19,7 @@ sealed interface TimelineItem {
     data class Header(val label: String, val date: LocalDate?) : TimelineItem
 
     /** A media item within a date section. */
-    data class Photo(val mediaItem: MediaItem) : TimelineItem
+    data class Media(val mediaItem: MediaItem) : TimelineItem
 }
 
 data class TimelineDateContext(
@@ -73,7 +73,7 @@ fun List<MediaItem>.toTimelineItems(): List<TimelineItem> {
             result.add(TimelineItem.Header(label = label, date = itemDate))
         }
 
-        result.add(TimelineItem.Photo(mediaItem = item))
+        result.add(TimelineItem.Media(mediaItem = item))
     }
 
     return result

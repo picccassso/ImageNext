@@ -38,7 +38,7 @@ class ViewerViewModel(
 
             val startIndex = allItems.indexOfFirst { it.remotePath == initialRemotePath }
             if (startIndex == -1) {
-                _uiState.value = ViewerUiState.Error("Image not found.")
+                _uiState.value = ViewerUiState.Error("Media not found.")
                 return@launch
             }
 
@@ -75,24 +75,39 @@ class ViewerViewModel(
         showMetadata: Boolean = false,
     ): ViewerUiState.Content {
         val currentItem = items[index]
-        val currentSource = viewerRepository.getRemoteImageSource(currentItem.remotePath)?.toUiSource()
-        val prefetchSources = viewerRepository.getAdjacentRemoteImageSources(
-            items = items,
-            centerIndex = index,
-            window = PREFETCH_WINDOW,
-        ).map { it.toUiSource() }
+        val currentSource = viewerRepository.getRemoteMediaSource(currentItem.remotePath)?.toUiSource()
+        val prefetchSources = buildAdjacentImageSources(items = items, centerIndex = index)
 
         return ViewerUiState.Content(
             items = items,
             currentIndex = index,
-            currentImageSource = currentSource,
-            prefetchSources = prefetchSources,
+            currentMediaSource = currentSource,
+            prefetchImageSources = prefetchSources,
             showMetadata = showMetadata,
         )
     }
 
-    private fun ViewerRepository.RemoteImageSource.toUiSource(): ViewerImageSource {
-        return ViewerImageSource(
+    private fun buildAdjacentImageSources(
+        items: List<MediaItem>,
+        centerIndex: Int,
+    ): List<ViewerMediaSource> {
+        if (items.isEmpty() || centerIndex !in items.indices) return emptyList()
+
+        val start = (centerIndex - PREFETCH_WINDOW).coerceAtLeast(0)
+        val end = (centerIndex + PREFETCH_WINDOW).coerceAtMost(items.lastIndex)
+
+        return (start..end)
+            .asSequence()
+            .filter { it != centerIndex }
+            .map { index -> items[index] }
+            .filter { item -> item.isImage }
+            .mapNotNull { item -> viewerRepository.getRemoteMediaSource(item.remotePath) }
+            .map { source -> source.toUiSource() }
+            .toList()
+    }
+
+    private fun ViewerRepository.RemoteMediaSource.toUiSource(): ViewerMediaSource {
+        return ViewerMediaSource(
             remotePath = remotePath,
             fullResUrl = fullResUrl,
             previewUrl = previewUrl,

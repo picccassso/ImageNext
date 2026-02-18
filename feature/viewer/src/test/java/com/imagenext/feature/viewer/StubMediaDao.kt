@@ -2,6 +2,7 @@ package com.imagenext.feature.viewer
 
 import androidx.paging.PagingSource
 import com.imagenext.core.database.dao.MediaDao
+import com.imagenext.core.database.dao.ReadyThumbnailReference
 import com.imagenext.core.database.entity.MediaItemEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -18,7 +19,9 @@ class StubMediaDao : MediaDao {
     override suspend fun getCount(): Int = 0
     override suspend fun getItemsNeedingThumbnail(limit: Int, maxRetryCount: Int): List<MediaItemEntity> = emptyList()
     override suspend fun markThumbnailReady(remotePath: String, thumbnailPath: String) {}
+    override suspend fun getReadyThumbnailReferences(): List<ReadyThumbnailReference> = emptyList()
     override suspend fun markThumbnailFailed(remotePath: String, errorCode: String) {}
+    override suspend fun markThumbnailSkipped(remotePath: String, reasonCode: String) {}
     override suspend fun resetThumbnailState(remotePath: String) {}
     override suspend fun getPendingThumbnailCount(maxRetryCount: Int): Int = 0
     override fun observePendingThumbnailCount(maxRetryCount: Int): Flow<Int> = emptyFlow()
@@ -28,6 +31,8 @@ class StubMediaDao : MediaDao {
     override suspend fun getExhaustedThumbnailFailureCountByError(maxRetryCount: Int, errorCode: String): Int = 0
     override suspend fun requeueExhaustedThumbnailFailures(maxRetryCount: Int): Int = 0
     override suspend fun requeueExhaustedThumbnailFailuresByError(maxRetryCount: Int, errorCode: String): Int = 0
+    override suspend fun requeueSkippedVideoThumbnails(): Int = 0
+    override suspend fun getSkippedVideoThumbnailCount(): Int = 0
     override fun getTimelinePaged(): PagingSource<Int, MediaItemEntity> {
         throw UnsupportedOperationException("Stub")
     }

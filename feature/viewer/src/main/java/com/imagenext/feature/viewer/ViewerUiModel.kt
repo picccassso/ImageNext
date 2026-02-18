@@ -2,7 +2,7 @@ package com.imagenext.feature.viewer
 
 import com.imagenext.core.model.MediaItem
 
-data class ViewerImageSource(
+data class ViewerMediaSource(
     val remotePath: String,
     val fullResUrl: String,
     val previewUrl: String,
@@ -23,10 +23,10 @@ sealed interface ViewerUiState {
         val items: List<MediaItem>,
         /** Index of the currently displayed item. */
         val currentIndex: Int,
-        /** Authenticated source for the current page image. */
-        val currentImageSource: ViewerImageSource? = null,
+        /** Authenticated source for the current page media. */
+        val currentMediaSource: ViewerMediaSource? = null,
         /** Authenticated sources to prefetch for adjacent images. */
-        val prefetchSources: List<ViewerImageSource> = emptyList(),
+        val prefetchImageSources: List<ViewerMediaSource> = emptyList(),
         /** Whether the metadata overlay is visible. */
         val showMetadata: Boolean = false,
     ) : ViewerUiState {

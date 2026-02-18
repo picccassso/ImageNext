@@ -1,6 +1,7 @@
 package com.imagenext.feature.viewer
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -19,7 +20,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
@@ -27,16 +30,24 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -49,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -57,10 +69,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.MediaItem as ExoMediaItem
+import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
+import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.imagenext.core.model.MediaItem
@@ -69,6 +89,7 @@ import com.imagenext.designsystem.ImageNextBlack
 import com.imagenext.designsystem.ImageNextWhite
 import com.imagenext.designsystem.Motion
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -85,6 +106,7 @@ private const val DOUBLE_TAP_SCALE = 3f
 
 /** Number of pages to prefetch on each side of the current page. */
 private const val PREFETCH_WINDOW = 1
+private const val VIDEO_CONTROLS_AUTO_HIDE_DELAY_MS = 2500L
 
 @Composable
 fun ViewerScreen(
@@ -180,7 +202,6 @@ private fun ViewerContent(
         )
     }
 
-    // derivedStateOf so downstream only recomposes when the Boolean flips, not every frame
     val transitionRunning by remember {
         derivedStateOf { transitionProgress.value < 1f || isClosingTransition }
     }
@@ -200,19 +221,13 @@ private fun ViewerContent(
 
     BackHandler(onBack = ::onBackRequested)
 
-    // All transitionProgress reads are deferred to the draw phase via graphicsLayer / drawBehind.
-    // This avoids recomposing the entire ViewerContent tree on every animation frame.
-
     Box(
         modifier = Modifier
             .fillMaxSize()
             .drawBehind {
-                // Scrim — deferred to draw phase, no recomposition
                 drawRect(Color.Black.copy(alpha = transitionProgress.value))
             }
     ) {
-        // Transition modifier — scale + alpha deferred to draw time, no clip (GPU-expensive)
-        // Transition modifier — fade only, no scale (appears in-place instantly)
         val transitionModifier = remember(transitionProgress) {
             Modifier.graphicsLayer {
                 alpha = transitionProgress.value.coerceIn(0f, 1f)
@@ -227,13 +242,14 @@ private fun ViewerContent(
                     showChrome = !showChrome
                 }
             },
+            showChrome = showChrome,
+            onChromeVisibilityChange = { visible -> showChrome = visible },
             interactionsEnabled = !transitionRunning,
             modifier = transitionModifier,
         )
 
-        PrefetchLayer(prefetchSources = state.prefetchSources)
+        PrefetchLayer(prefetchSources = state.prefetchImageSources)
 
-        // Top bar overlay — chrome fades in once transition is well underway
         val chromeReady by remember {
             derivedStateOf { !isClosingTransition && transitionProgress.value > 0.7f }
         }
@@ -249,7 +265,7 @@ private fun ViewerContent(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         color = ImageNextWhite,
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleMedium,
                     )
                 },
                 navigationIcon = {
@@ -276,7 +292,6 @@ private fun ViewerContent(
             )
         }
 
-        // Metadata overlay at the bottom with premium blur effect
         AnimatedVisibility(
             visible = showChrome && state.showMetadata,
             enter = fadeIn() + slideInVertically { it / 2 },
@@ -293,6 +308,8 @@ private fun ViewerPager(
     pagerState: PagerState,
     state: ViewerUiState.Content,
     onTap: () -> Unit,
+    showChrome: Boolean,
+    onChromeVisibilityChange: (Boolean) -> Unit,
     interactionsEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -305,24 +322,379 @@ private fun ViewerPager(
         key = { items[it].remotePath },
     ) { page ->
         val mediaItem = items[page]
-        val imageSource = when {
-            mediaItem.remotePath == state.currentItem.remotePath -> state.currentImageSource
-            else -> state.prefetchSources.firstOrNull { it.remotePath == mediaItem.remotePath }
+        val mediaSource = when {
+            mediaItem.remotePath == state.currentItem.remotePath -> state.currentMediaSource
+            else -> state.prefetchImageSources.firstOrNull { it.remotePath == mediaItem.remotePath }
         }
 
-        ZoomableImage(
+        if (mediaItem.isVideo) {
+            VideoPage(
+                mediaItem = mediaItem,
+                mediaSource = mediaSource,
+                isActivePage = page == state.currentIndex,
+                showChrome = showChrome,
+                onChromeVisibilityChange = onChromeVisibilityChange,
+                onTap = onTap,
+            )
+        } else {
+            ZoomableImage(
+                mediaItem = mediaItem,
+                imageSource = mediaSource,
+                onTap = onTap,
+                interactionsEnabled = interactionsEnabled,
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoPage(
+    mediaItem: MediaItem,
+    mediaSource: ViewerMediaSource?,
+    isActivePage: Boolean,
+    showChrome: Boolean,
+    onChromeVisibilityChange: (Boolean) -> Unit,
+    onTap: () -> Unit,
+) {
+    if (!isActivePage) {
+        VideoPoster(
             mediaItem = mediaItem,
-            imageSource = imageSource,
+            mediaSource = mediaSource,
             onTap = onTap,
-            interactionsEnabled = interactionsEnabled,
         )
+        return
+    }
+
+    ActiveVideoPlayer(
+        mediaItem = mediaItem,
+        mediaSource = mediaSource,
+        showChrome = showChrome,
+        onChromeVisibilityChange = onChromeVisibilityChange,
+        onTap = onTap,
+    )
+}
+
+@Composable
+private fun VideoPoster(
+    mediaItem: MediaItem,
+    mediaSource: ViewerMediaSource?,
+    onTap: () -> Unit,
+) {
+    val context = LocalContext.current
+    val localThumbnail = remember(mediaItem.remotePath, mediaItem.thumbnailPath) {
+        mediaItem.thumbnailPath?.let { path ->
+            val file = File(path)
+            if (file.exists()) file else null
+        }
+    }
+    val posterRequest = remember(mediaItem.remotePath, mediaItem.thumbnailPath, mediaSource) {
+        when {
+            localThumbnail != null -> ImageRequest.Builder(context)
+                .data(localThumbnail)
+                .build()
+            mediaSource != null -> buildRemoteImageRequest(
+                context = context,
+                url = mediaSource.previewUrl,
+                authHeader = mediaSource.authHeader,
+            )
+            else -> null
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(mediaItem.remotePath) {
+                detectTapGestures(onTap = { onTap() })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (posterRequest != null) {
+            AsyncImage(
+                model = posterRequest,
+                contentDescription = mediaItem.fileName,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.Videocam,
+                contentDescription = mediaItem.fileName,
+                tint = Color.White.copy(alpha = 0.3f),
+                modifier = Modifier.size(64.dp),
+            )
+        }
+
+        Icon(
+            imageVector = Icons.Default.PlayArrow,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.92f),
+            modifier = Modifier.size(54.dp),
+        )
+    }
+}
+
+@Composable
+private fun ActiveVideoPlayer(
+    mediaItem: MediaItem,
+    mediaSource: ViewerMediaSource?,
+    showChrome: Boolean,
+    onChromeVisibilityChange: (Boolean) -> Unit,
+    onTap: () -> Unit,
+) {
+    if (mediaSource == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(mediaItem.remotePath) {
+                    detectTapGestures(onTap = { onTap() })
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Videocam,
+                contentDescription = mediaItem.fileName,
+                tint = Color.White.copy(alpha = 0.3f),
+                modifier = Modifier.size(64.dp),
+            )
+        }
+        return
+    }
+
+    val context = LocalContext.current
+    val exoPlayer = remember(mediaItem.remotePath) {
+        ExoPlayer.Builder(context)
+            .build()
+            .apply {
+                playWhenReady = false
+                repeatMode = Player.REPEAT_MODE_OFF
+            }
+    }
+    var isPlaying by remember(mediaItem.remotePath) { mutableStateOf(false) }
+    var isMuted by remember(mediaItem.remotePath) { mutableStateOf(false) }
+    var durationMs by remember(mediaItem.remotePath) { mutableStateOf(0L) }
+    var positionMs by remember(mediaItem.remotePath) { mutableStateOf(0L) }
+    var isScrubbing by remember(mediaItem.remotePath) { mutableStateOf(false) }
+    var scrubPositionMs by remember(mediaItem.remotePath) { mutableStateOf(0L) }
+    var lastInteractionTick by remember(mediaItem.remotePath) {
+        mutableStateOf(SystemClock.elapsedRealtime())
+    }
+
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                durationMs = exoPlayer.duration.coerceAtLeast(0L)
+            }
+
+            override fun onEvents(player: Player, events: Player.Events) {
+                durationMs = player.duration.coerceAtLeast(0L)
+                if (!isScrubbing) {
+                    positionMs = player.currentPosition.coerceAtLeast(0L)
+                }
+            }
+        }
+
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
+        }
+    }
+
+    LaunchedEffect(mediaSource.fullResUrl, mediaSource.authHeader) {
+        val dataSourceFactory = DefaultHttpDataSource.Factory()
+            .setDefaultRequestProperties(
+                mapOf("Authorization" to mediaSource.authHeader)
+            )
+
+        val mediaItem = ExoMediaItem.fromUri(mediaSource.fullResUrl)
+        val mediaSourceFactory = ProgressiveMediaSource.Factory(dataSourceFactory)
+        exoPlayer.setMediaSource(mediaSourceFactory.createMediaSource(mediaItem))
+        exoPlayer.prepare()
+        exoPlayer.volume = if (isMuted) 0f else 1f
+        exoPlayer.playWhenReady = true
+        positionMs = 0L
+        scrubPositionMs = 0L
+        lastInteractionTick = SystemClock.elapsedRealtime()
+        onChromeVisibilityChange(true)
+    }
+
+    LaunchedEffect(isMuted) {
+        exoPlayer.volume = if (isMuted) 0f else 1f
+    }
+
+    LaunchedEffect(showChrome) {
+        if (showChrome) {
+            lastInteractionTick = SystemClock.elapsedRealtime()
+        }
+    }
+
+    LaunchedEffect(exoPlayer, isScrubbing) {
+        while (true) {
+            if (!isScrubbing) {
+                positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+            }
+            durationMs = exoPlayer.duration.coerceAtLeast(0L)
+            delay(200)
+        }
+    }
+
+    LaunchedEffect(showChrome, isPlaying, isScrubbing, lastInteractionTick) {
+        if (!shouldAutoHideVideoControls(showChrome = showChrome, isPlaying = isPlaying, isScrubbing = isScrubbing)) {
+            return@LaunchedEffect
+        }
+        val interactionSnapshot = lastInteractionTick
+        delay(VIDEO_CONTROLS_AUTO_HIDE_DELAY_MS)
+        if (
+            shouldAutoHideVideoControls(showChrome = showChrome, isPlaying = isPlaying, isScrubbing = isScrubbing) &&
+            interactionSnapshot == lastInteractionTick
+        ) {
+            onChromeVisibilityChange(false)
+        }
+    }
+
+    val safeDurationMs = durationMs.coerceAtLeast(0L)
+    val currentPositionMs = if (isScrubbing) scrubPositionMs else positionMs
+    val clampedPositionMs = if (safeDurationMs > 0L) {
+        currentPositionMs.coerceIn(0L, safeDurationMs)
+    } else {
+        currentPositionMs.coerceAtLeast(0L)
+    }
+    val sliderEnabled = safeDurationMs > 0L
+    val sliderValue = if (sliderEnabled) clampedPositionMs.toFloat() else 0f
+    val sliderRange = if (sliderEnabled) 0f..safeDurationMs.toFloat() else 0f..1f
+
+    fun registerInteraction() {
+        lastInteractionTick = SystemClock.elapsedRealtime()
+        onChromeVisibilityChange(true)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(mediaItem.remotePath) {
+                detectTapGestures(onTap = { onTap() })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        AndroidView(
+            factory = { viewContext ->
+                PlayerView(viewContext).apply {
+                    player = exoPlayer
+                    useController = false
+                    setShutterBackgroundColor(android.graphics.Color.BLACK)
+                }
+            },
+            update = { playerView ->
+                playerView.player = exoPlayer
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        if (showChrome) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(140.dp)
+                    .background(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.45f)),
+                        )
+                    ),
+            )
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 20.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    IconButton(
+                        onClick = {
+                            if (exoPlayer.isPlaying) {
+                                exoPlayer.pause()
+                            } else {
+                                exoPlayer.play()
+                            }
+                            registerInteraction()
+                        },
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = Color.White,
+                            modifier = Modifier.size(30.dp),
+                        )
+                    }
+
+                    Text(
+                        text = "${formatVideoTime(clampedPositionMs)} / ${formatVideoTime(safeDurationMs)}",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+
+                    IconButton(
+                        onClick = {
+                            isMuted = !isMuted
+                            registerInteraction()
+                        },
+                    ) {
+                        Icon(
+                            imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                            contentDescription = if (isMuted) "Sound off" else "Sound on",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.size(4.dp))
+
+                Slider(
+                    value = sliderValue,
+                    onValueChange = { newValue ->
+                        if (!sliderEnabled) return@Slider
+                        if (!isScrubbing) {
+                            isScrubbing = true
+                        }
+                        scrubPositionMs = newValue.toLong()
+                        registerInteraction()
+                    },
+                    onValueChangeFinished = {
+                        if (!sliderEnabled) return@Slider
+                        val seekTargetMs = scrubPositionMs.coerceIn(0L, safeDurationMs)
+                        exoPlayer.seekTo(seekTargetMs)
+                        positionMs = seekTargetMs
+                        isScrubbing = false
+                        registerInteraction()
+                    },
+                    valueRange = sliderRange,
+                    enabled = sliderEnabled,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color.White,
+                        activeTrackColor = Color.White.copy(alpha = 0.95f),
+                        inactiveTrackColor = Color.White.copy(alpha = 0.32f),
+                    ),
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun ZoomableImage(
     mediaItem: MediaItem,
-    imageSource: ViewerImageSource?,
+    imageSource: ViewerMediaSource?,
     onTap: () -> Unit,
     interactionsEnabled: Boolean,
 ) {
@@ -331,7 +703,6 @@ private fun ZoomableImage(
     val offsetY = remember { Animatable(0f) }
     val coroutineScope = rememberCoroutineScope()
 
-    // Reset zoom state when the media item changes
     LaunchedEffect(mediaItem.remotePath) {
         scale.snapTo(1f)
         offsetX.snapTo(0f)
@@ -345,8 +716,6 @@ private fun ZoomableImage(
             if (file.exists()) file else null
         }
     }
-    // Viewer should render the full remote image directly (Google Photos-style).
-    // Local thumbnail is only a fallback when no authenticated remote source exists.
     val imageRequest = remember(mediaItem.remotePath, mediaItem.thumbnailPath, imageSource) {
         when {
             imageSource != null -> buildRemoteImageRequest(
@@ -433,7 +802,6 @@ private fun ZoomableImage(
                 modifier = graphicsModifier,
             )
         } else {
-            // No local or remote source available yet.
             Icon(
                 imageVector = Icons.Default.Photo,
                 contentDescription = mediaItem.fileName,
@@ -445,7 +813,7 @@ private fun ZoomableImage(
 }
 
 @Composable
-private fun PrefetchLayer(prefetchSources: List<ViewerImageSource>) {
+private fun PrefetchLayer(prefetchSources: List<ViewerMediaSource>) {
     if (prefetchSources.isEmpty()) return
 
     val context = LocalContext.current
@@ -479,6 +847,7 @@ private fun buildRemoteImageRequest(
     return ImageRequest.Builder(context)
         .data(url)
         .httpHeaders(NetworkHeaders.Builder().set("Authorization", authHeader).build())
+        .diskCachePolicy(CachePolicy.DISABLED)
         .crossfade(150)
         .build()
 }
@@ -554,4 +923,26 @@ private fun formatFileSize(bytes: Long): String {
 private fun formatDate(epochMillis: Long): String {
     val formatter = SimpleDateFormat("MMM d, yyyy HH:mm", Locale.getDefault())
     return formatter.format(Date(epochMillis))
+}
+
+internal fun formatVideoTime(milliseconds: Long): String {
+    val totalSeconds = (milliseconds / 1000L).coerceAtLeast(0L)
+    val seconds = totalSeconds % 60
+    val totalMinutes = totalSeconds / 60
+    val minutes = totalMinutes % 60
+    val hours = totalMinutes / 60
+
+    return if (hours > 0) {
+        String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.US, "%d:%02d", minutes, seconds)
+    }
+}
+
+internal fun shouldAutoHideVideoControls(
+    showChrome: Boolean,
+    isPlaying: Boolean,
+    isScrubbing: Boolean,
+): Boolean {
+    return showChrome && isPlaying && !isScrubbing
 }

@@ -144,7 +144,7 @@ private fun AlbumCard(
             modifier = Modifier.padding(horizontal = 4.dp)
         )
 
-        val itemText = "${album.mediaCount} photo${if (album.mediaCount != 1) "s" else ""}"
+        val itemText = "${album.mediaCount} item${if (album.mediaCount != 1) "s" else ""}"
         Text(
             text = itemText,
             style = MaterialTheme.typography.bodySmall,

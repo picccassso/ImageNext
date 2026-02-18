@@ -37,13 +37,13 @@ class PhotosViewModel(
             .map { pagingData ->
                 val dateContext = TimelineDateContext()
                 pagingData
-                    .map { mediaItem -> TimelineItem.Photo(mediaItem) as TimelineItem }
+                    .map { mediaItem -> TimelineItem.Media(mediaItem) as TimelineItem }
                     .insertSeparators { before, after ->
-                        val nextPhoto = after as? TimelineItem.Photo ?: return@insertSeparators null
-                        val previousPhoto = before as? TimelineItem.Photo
+                        val nextMedia = after as? TimelineItem.Media ?: return@insertSeparators null
+                        val previousMedia = before as? TimelineItem.Media
 
-                        val nextDate = nextPhoto.mediaItem.resolveTimelineDate(dateContext)
-                        val previousDate = previousPhoto?.mediaItem?.resolveTimelineDate(dateContext)
+                        val nextDate = nextMedia.mediaItem.resolveTimelineDate(dateContext)
+                        val previousDate = previousMedia?.mediaItem?.resolveTimelineDate(dateContext)
 
                         if (before == null || timelineGroupKey(previousDate) != timelineGroupKey(nextDate)) {
                             TimelineItem.Header(

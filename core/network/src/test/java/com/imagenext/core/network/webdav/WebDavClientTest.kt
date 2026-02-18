@@ -228,6 +228,77 @@ class WebDavClientTest {
         val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
         assertEquals(1, items.size)
         assertEquals("new_upload.JPG", items[0].fileName)
+        assertEquals("image/jpeg", items[0].mimeType)
+    }
+
+    @Test
+    fun `parseMediaItems includes video when mime type is video slash`() {
+        val xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <d:multistatus xmlns:d="DAV:">
+                <d:response>
+                    <d:href>/remote.php/dav/files/testuser/Photos/clip.mp4</d:href>
+                    <d:propstat>
+                        <d:prop>
+                            <d:resourcetype/>
+                            <d:getcontenttype>video/mp4</d:getcontenttype>
+                            <d:getcontentlength>4096</d:getcontentlength>
+                        </d:prop>
+                    </d:propstat>
+                </d:response>
+            </d:multistatus>
+        """.trimIndent()
+
+        val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
+        assertEquals(1, items.size)
+        assertEquals("clip.mp4", items[0].fileName)
+        assertEquals("video/mp4", items[0].mimeType)
+    }
+
+    @Test
+    fun `parseMediaItems includes video by extension when content type is generic`() {
+        val xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <d:multistatus xmlns:d="DAV:">
+                <d:response>
+                    <d:href>/remote.php/dav/files/testuser/Photos/holiday.MOV</d:href>
+                    <d:propstat>
+                        <d:prop>
+                            <d:resourcetype/>
+                            <d:getcontenttype>application/octet-stream</d:getcontenttype>
+                            <d:getcontentlength>5096</d:getcontentlength>
+                        </d:prop>
+                    </d:propstat>
+                </d:response>
+            </d:multistatus>
+        """.trimIndent()
+
+        val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
+        assertEquals(1, items.size)
+        assertEquals("holiday.MOV", items[0].fileName)
+        assertEquals("video/quicktime", items[0].mimeType)
+    }
+
+    @Test
+    fun `parseMediaItems excludes unsupported non-media files`() {
+        val xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <d:multistatus xmlns:d="DAV:">
+                <d:response>
+                    <d:href>/remote.php/dav/files/testuser/Photos/report.pdf</d:href>
+                    <d:propstat>
+                        <d:prop>
+                            <d:resourcetype/>
+                            <d:getcontenttype>application/pdf</d:getcontenttype>
+                            <d:getcontentlength>1200</d:getcontentlength>
+                        </d:prop>
+                    </d:propstat>
+                </d:response>
+            </d:multistatus>
+        """.trimIndent()
+
+        val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
+        assertTrue(items.isEmpty())
     }
 
     // --- Safety limits ---

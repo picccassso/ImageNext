@@ -29,7 +29,7 @@ import com.imagenext.feature.folders.FolderSelectionViewModelFactory
 import com.imagenext.feature.onboarding.OnboardingScreen
 import com.imagenext.feature.onboarding.OnboardingViewModel
 import com.imagenext.feature.onboarding.OnboardingViewModelFactory
-import com.imagenext.feature.photos.PhotoOpenRequest
+import com.imagenext.feature.photos.MediaOpenRequest
 import com.imagenext.feature.photos.PhotosScreen
 import com.imagenext.feature.photos.PhotosViewModel
 import com.imagenext.feature.photos.PhotosViewModelFactory
@@ -58,7 +58,7 @@ object NavRoutes {
             "&$ORIGIN_WIDTH={$ORIGIN_WIDTH}&$ORIGIN_HEIGHT={$ORIGIN_HEIGHT}"
 
     /** Builds a viewer route for a specific media item. */
-    fun viewerRoute(request: PhotoOpenRequest): String {
+    fun viewerRoute(request: MediaOpenRequest): String {
         val encoded = URLEncoder.encode(request.remotePath, "UTF-8")
         val origin = request.originBounds
         val left = origin?.left ?: -1
@@ -182,7 +182,7 @@ fun AppNavHost(
             )
             PhotosScreen(
                 viewModel = photosViewModel,
-                onPhotoClick = { request ->
+                onMediaClick = { request ->
                     navController.navigate(NavRoutes.viewerRoute(request))
                 },
             )

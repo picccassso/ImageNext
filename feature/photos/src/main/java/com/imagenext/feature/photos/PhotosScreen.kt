@@ -34,6 +34,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayCircleFilled
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
@@ -78,6 +80,7 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import coil3.compose.AsyncImage
 import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
+import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import com.imagenext.core.model.MediaItem
 import com.imagenext.core.model.SyncState
@@ -94,7 +97,7 @@ private const val GRID_PREVIEW_SIZE = 256
 private const val PERF_TAG = "ImageNextPerf"
 private const val MAX_FLING_VELOCITY_PX_PER_SECOND = 8500f
 
-data class PhotoOpenRequest(
+data class MediaOpenRequest(
     val remotePath: String,
     val originBounds: IntRect? = null,
 )
@@ -103,7 +106,7 @@ data class PhotoOpenRequest(
 @Composable
 fun PhotosScreen(
     viewModel: PhotosViewModel,
-    onPhotoClick: (PhotoOpenRequest) -> Unit = {},
+    onMediaClick: (MediaOpenRequest) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val screenStartMs = remember { SystemClock.elapsedRealtime() }
@@ -212,7 +215,7 @@ fun PhotosScreen(
                         gridState = gridState,
                         flingBehavior = gridFlingBehavior,
                         allowRemotePreview = allowRemotePreview,
-                        onPhotoClick = onPhotoClick,
+                        onMediaClick = onMediaClick,
                         remotePreviewAuth = remotePreviewAuth,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -247,7 +250,7 @@ private fun PhotosGrid(
     gridState: LazyGridState,
     flingBehavior: FlingBehavior,
     allowRemotePreview: Boolean,
-    onPhotoClick: (PhotoOpenRequest) -> Unit,
+    onMediaClick: (MediaOpenRequest) -> Unit,
     remotePreviewAuth: RemotePreviewAuth?,
     modifier: Modifier = Modifier,
 ) {
@@ -265,14 +268,14 @@ private fun PhotosGrid(
             key = { index ->
                 when (val item = pagingItems[index]) {
                     is TimelineItem.Header -> "header_${item.date?.toEpochDay() ?: Long.MIN_VALUE}"
-                    is TimelineItem.Photo -> item.mediaItem.remotePath
+                    is TimelineItem.Media -> item.mediaItem.remotePath
                     null -> "placeholder_$index"
                 }
             },
             contentType = { index ->
                 when (pagingItems[index]) {
                     is TimelineItem.Header -> "header"
-                    is TimelineItem.Photo -> "photo"
+                    is TimelineItem.Media -> "media"
                     null -> "placeholder"
                 }
             },
@@ -294,14 +297,14 @@ private fun PhotosGrid(
                         modifier = Modifier.padding(start = 14.dp, top = 20.dp, bottom = 6.dp),
                     )
                 }
-                is TimelineItem.Photo -> {
+                is TimelineItem.Media -> {
                     ThumbnailCell(
                         mediaItem = item.mediaItem,
                         remotePreviewAuth = remotePreviewAuth,
                         allowRemotePreview = allowRemotePreview,
                         onClick = { originBounds ->
-                            onPhotoClick(
-                                PhotoOpenRequest(
+                            onMediaClick(
+                                MediaOpenRequest(
                                     remotePath = item.mediaItem.remotePath,
                                     originBounds = originBounds,
                                 )
@@ -380,10 +383,19 @@ private fun ThumbnailCell(
             )
         } else {
             Icon(
-                imageVector = Icons.Default.Photo,
+                imageVector = if (mediaItem.isVideo) Icons.Default.Videocam else Icons.Default.Photo,
                 contentDescription = mediaItem.fileName,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
                 modifier = Modifier.size(32.dp),
+            )
+        }
+
+        if (mediaItem.isVideo) {
+            Icon(
+                imageVector = Icons.Default.PlayCircleFilled,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(28.dp),
             )
         }
     }
@@ -527,6 +539,7 @@ private fun resolveGridImageModel(
                 .set("OCS-APIRequest", "true")
                 .build()
         )
+        .diskCachePolicy(CachePolicy.DISABLED)
         .build()
 }
 

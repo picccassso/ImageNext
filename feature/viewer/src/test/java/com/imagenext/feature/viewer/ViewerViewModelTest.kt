@@ -65,7 +65,7 @@ class ViewerViewModelTest {
         assertTrue(state is ViewerUiState.Content)
         assertEquals(1, (state as ViewerUiState.Content).currentIndex)
         assertEquals("/b.jpg", state.currentItem.remotePath)
-        assertEquals("/b.jpg", state.currentImageSource?.remotePath)
+        assertEquals("/b.jpg", state.currentMediaSource?.remotePath)
     }
 
     @Test
@@ -203,14 +203,32 @@ class ViewerViewModelTest {
 
         advanceUntilIdle()
         val before = vm.uiState.value as ViewerUiState.Content
-        assertEquals("/b.jpg", before.currentImageSource?.remotePath)
-        assertEquals(2, before.prefetchSources.size)
+        assertEquals("/b.jpg", before.currentMediaSource?.remotePath)
+        assertEquals(2, before.prefetchImageSources.size)
 
         vm.onPageChanged(0)
         val after = vm.uiState.value as ViewerUiState.Content
-        assertEquals("/a.jpg", after.currentImageSource?.remotePath)
-        assertEquals(1, after.prefetchSources.size)
-        assertEquals("/b.jpg", after.prefetchSources.first().remotePath)
+        assertEquals("/a.jpg", after.currentMediaSource?.remotePath)
+        assertEquals(1, after.prefetchImageSources.size)
+        assertEquals("/b.jpg", after.prefetchImageSources.first().remotePath)
+    }
+
+    @Test
+    fun `prefetch list excludes adjacent videos`() = runTest {
+        val items = listOf(
+            mediaItem("/a.jpg", 3000),
+            mediaItem("/b.mp4", 2000).copy(mimeType = "video/mp4"),
+            mediaItem("/c.jpg", 1000),
+        )
+        val repo = FakeViewerRepository(items)
+        val vm = ViewerViewModel(repo, "/b.mp4")
+
+        advanceUntilIdle()
+
+        val state = vm.uiState.value as ViewerUiState.Content
+        assertEquals("/b.mp4", state.currentMediaSource?.remotePath)
+        assertEquals(2, state.prefetchImageSources.size)
+        assertTrue(state.prefetchImageSources.all { it.remotePath.endsWith(".jpg") })
     }
 }
 
@@ -230,8 +248,8 @@ private class FakeViewerRepository(
         return items
     }
 
-    override fun getRemoteImageSource(remotePath: String): RemoteImageSource? {
-        return RemoteImageSource(
+    override fun getRemoteMediaSource(remotePath: String): RemoteMediaSource? {
+        return RemoteMediaSource(
             remotePath = remotePath,
             fullResUrl = "https://example.com/full$remotePath",
             previewUrl = "https://example.com/preview$remotePath",
@@ -239,16 +257,16 @@ private class FakeViewerRepository(
         )
     }
 
-    override fun getAdjacentRemoteImageSources(
+    override fun getAdjacentRemoteMediaSources(
         items: List<MediaItem>,
         centerIndex: Int,
         window: Int,
-    ): List<RemoteImageSource> {
+    ): List<RemoteMediaSource> {
         if (items.isEmpty() || centerIndex !in items.indices || window <= 0) return emptyList()
         val start = (centerIndex - window).coerceAtLeast(0)
         val end = (centerIndex + window).coerceAtMost(items.lastIndex)
         return (start..end)
             .filter { it != centerIndex }
-            .map { index -> getRemoteImageSource(items[index].remotePath)!! }
+            .map { index -> getRemoteMediaSource(items[index].remotePath)!! }
     }
 }

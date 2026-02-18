@@ -24,7 +24,7 @@ open class ViewerRepository(
      * `fullResUrl` is the canonical WebDAV file URL.
      * `previewUrl` is a smaller preview fallback for faster progressive display.
      */
-    data class RemoteImageSource(
+    data class RemoteMediaSource(
         val remotePath: String,
         val fullResUrl: String,
         val previewUrl: String,
@@ -65,8 +65,8 @@ open class ViewerRepository(
         }
     }
 
-    /** Returns an authenticated remote image source for a media path, or null if no active session. */
-    open fun getRemoteImageSource(remotePath: String): RemoteImageSource? {
+    /** Returns an authenticated remote source for a media path, or null if no active session. */
+    open fun getRemoteMediaSource(remotePath: String): RemoteMediaSource? {
         val session = sessionRepository?.getSession() ?: return null
         val cleanPath = remotePath.trimStart('/')
         val encodedPath = encodePathForWebDav(cleanPath)
@@ -82,7 +82,7 @@ open class ViewerRepository(
             password = session.appPassword,
         )
 
-        return RemoteImageSource(
+        return RemoteMediaSource(
             remotePath = remotePath,
             fullResUrl = fullResUrl,
             previewUrl = previewUrl,
@@ -94,11 +94,11 @@ open class ViewerRepository(
      * Returns authenticated image sources for adjacent items around the current index.
      * Used by the viewer for proactive prefetch.
      */
-    open fun getAdjacentRemoteImageSources(
+    open fun getAdjacentRemoteMediaSources(
         items: List<MediaItem>,
         centerIndex: Int,
         window: Int = 1,
-    ): List<RemoteImageSource> {
+    ): List<RemoteMediaSource> {
         if (items.isEmpty() || centerIndex !in items.indices || window <= 0) return emptyList()
 
         val start = (centerIndex - window).coerceAtLeast(0)
@@ -106,9 +106,20 @@ open class ViewerRepository(
         return (start..end)
             .asSequence()
             .filter { it != centerIndex }
-            .mapNotNull { index -> getRemoteImageSource(items[index].remotePath) }
+            .mapNotNull { index -> getRemoteMediaSource(items[index].remotePath) }
             .toList()
     }
+
+    // Backward compatible wrappers while viewer migrates to media terminology.
+    open fun getRemoteImageSource(remotePath: String): RemoteMediaSource? =
+        getRemoteMediaSource(remotePath)
+
+    open fun getAdjacentRemoteImageSources(
+        items: List<MediaItem>,
+        centerIndex: Int,
+        window: Int = 1,
+    ): List<RemoteMediaSource> =
+        getAdjacentRemoteMediaSources(items = items, centerIndex = centerIndex, window = window)
 
     private fun encodePathForWebDav(path: String): String {
         if (path.isBlank()) return ""

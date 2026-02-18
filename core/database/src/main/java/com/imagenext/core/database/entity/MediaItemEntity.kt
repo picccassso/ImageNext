@@ -49,7 +49,7 @@ data class MediaItemEntity(
     /** Local path to cached thumbnail, or null if not yet fetched. */
     val thumbnailPath: String? = null,
 
-    /** Thumbnail lifecycle state (`PENDING`, `READY`, `FAILED`). */
+    /** Thumbnail lifecycle state (`PENDING`, `READY`, `FAILED`, `SKIPPED`). */
     @ColumnInfo(defaultValue = THUMBNAIL_STATUS_PENDING)
     val thumbnailStatus: String = THUMBNAIL_STATUS_PENDING,
 
@@ -67,3 +67,4 @@ data class MediaItemEntity(
 const val THUMBNAIL_STATUS_PENDING = "PENDING"
 const val THUMBNAIL_STATUS_READY = "READY"
 const val THUMBNAIL_STATUS_FAILED = "FAILED"
+const val THUMBNAIL_STATUS_SKIPPED = "SKIPPED"

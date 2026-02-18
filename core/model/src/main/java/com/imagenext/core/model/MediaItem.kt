@@ -26,4 +26,13 @@ data class MediaItem(
     val etag: String,
     val thumbnailPath: String? = null,
     val folderPath: String,
-)
+) {
+    val mediaKind: MediaKind
+        get() = MediaKind.from(mimeType = mimeType, fileName = fileName)
+
+    val isImage: Boolean
+        get() = mediaKind == MediaKind.IMAGE
+
+    val isVideo: Boolean
+        get() = mediaKind == MediaKind.VIDEO
+}

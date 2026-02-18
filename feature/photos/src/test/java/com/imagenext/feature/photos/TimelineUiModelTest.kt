@@ -47,7 +47,7 @@ class TimelineUiModelTest {
         assertEquals(2, timeline.size)
         assertTrue(timeline[0] is TimelineItem.Header)
         assertEquals("Today", (timeline[0] as TimelineItem.Header).label)
-        assertTrue(timeline[1] is TimelineItem.Photo)
+        assertTrue(timeline[1] is TimelineItem.Media)
     }
 
     @Test
@@ -63,8 +63,8 @@ class TimelineUiModelTest {
 
         assertEquals(3, timeline.size) // 1 header + 2 photos
         assertTrue(timeline[0] is TimelineItem.Header)
-        assertTrue(timeline[1] is TimelineItem.Photo)
-        assertTrue(timeline[2] is TimelineItem.Photo)
+        assertTrue(timeline[1] is TimelineItem.Media)
+        assertTrue(timeline[2] is TimelineItem.Media)
     }
 
     @Test
@@ -145,5 +145,20 @@ class TimelineUiModelTest {
         val timeline = items.toTimelineItems()
         val header = timeline[0] as TimelineItem.Header
         assertTrue(header.label.contains("2023"))
+    }
+
+    @Test
+    fun `mixed image and video keep same date grouping behavior`() {
+        val today = LocalDate.now(zone)
+        val millis = epochMillisForDate(today)
+        val image = mediaItem("/a.jpg", millis + 1000, fileName = "a.jpg")
+        val video = mediaItem("/b.mp4", millis + 2000, fileName = "b.mp4").copy(mimeType = "video/mp4")
+
+        val timeline = listOf(image, video).toTimelineItems()
+
+        assertEquals(3, timeline.size)
+        assertTrue(timeline[0] is TimelineItem.Header)
+        assertTrue(timeline[1] is TimelineItem.Media)
+        assertTrue(timeline[2] is TimelineItem.Media)
     }
 }

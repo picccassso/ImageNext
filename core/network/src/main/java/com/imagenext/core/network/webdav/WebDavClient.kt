@@ -1,6 +1,7 @@
 package com.imagenext.core.network.webdav
 
 import com.imagenext.core.model.MediaItem
+import com.imagenext.core.model.MediaKind
 import com.imagenext.core.model.SelectedFolder
 import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaType
@@ -107,10 +108,10 @@ class WebDavClient(
     }
 
     /**
-     * Lists media files (images) in the given [folderPath].
+     * Lists media files in the given [folderPath].
      *
      * Uses a PROPFIND Depth:1 to enumerate immediate children and filters
-     * for known image MIME types.
+     * for known media MIME types.
      */
     fun listMediaFiles(
         serverUrl: String,
@@ -149,7 +150,7 @@ class WebDavClient(
      * Recursively lists media files under [folderPath].
      *
      * Traverses child folders breadth-first up to [maxDepth], issuing
-     * Depth:1 PROPFIND per folder and aggregating all image-like files.
+     * Depth:1 PROPFIND per folder and aggregating all supported media files.
      */
     fun listMediaFilesRecursively(
         serverUrl: String,
@@ -433,7 +434,7 @@ class WebDavClient(
 
     /**
      * Parses WebDAV multistatus XML to extract media file items.
-     * Filters for known image MIME types.
+     * Filters for known media MIME types.
      */
     internal fun parseMediaItems(
         xml: String,
@@ -491,8 +492,9 @@ class WebDavClient(
                     if (parser.name == "response" || parser.name == "d:response") {
                         if (inResponse && !isCollection && href != null) {
                             val remotePath = extractRemotePath(href, loginName)
-                            if (isLikelyImage(contentType, remotePath)) {
-                                val fileName = remotePath.substringAfterLast('/')
+                            val fileName = remotePath.substringAfterLast('/')
+                            val mediaKind = resolveMediaKind(contentType, fileName)
+                            if (mediaKind != MediaKind.UNKNOWN) {
                                 val timestamp = parseHttpDate(lastModified)
                                 val captureTimestamp = parseCaptureTimestampFromFileName(fileName)
 
@@ -500,7 +502,7 @@ class WebDavClient(
                                     MediaItem(
                                         remotePath = remotePath,
                                         fileName = fileName,
-                                        mimeType = contentType.orEmpty(),
+                                        mimeType = normalizeMimeType(contentType, fileName, mediaKind),
                                         size = contentLength,
                                         lastModified = timestamp,
                                         captureTimestamp = captureTimestamp,
@@ -535,16 +537,30 @@ class WebDavClient(
         }
     }
 
-    private fun isImageMimeType(mimeType: String?): Boolean {
-        if (mimeType == null) return false
-        return mimeType.startsWith("image/")
+    private fun resolveMediaKind(mimeType: String?, fileName: String): MediaKind {
+        return MediaKind.from(
+            mimeType = mimeType,
+            fileName = fileName,
+        )
     }
 
-    private fun isLikelyImage(mimeType: String?, remotePath: String): Boolean {
-        if (isImageMimeType(mimeType)) return true
+    private fun normalizeMimeType(mimeType: String?, fileName: String, mediaKind: MediaKind): String {
+        val normalized = mimeType?.trim().orEmpty()
+        if (normalized.isNotBlank() && !GENERIC_MIME_TYPES.contains(normalized.lowercase(Locale.US))) {
+            return normalized
+        }
 
-        val extension = remotePath.substringAfterLast('.', "").lowercase(Locale.US)
-        return extension in IMAGE_FILE_EXTENSIONS
+        return when (mediaKind) {
+            MediaKind.IMAGE -> {
+                val extension = fileName.substringAfterLast('.', "").lowercase(Locale.US)
+                IMAGE_EXTENSION_TO_MIME[extension] ?: "image/*"
+            }
+            MediaKind.VIDEO -> {
+                val extension = fileName.substringAfterLast('.', "").lowercase(Locale.US)
+                VIDEO_EXTENSION_TO_MIME[extension] ?: "video/*"
+            }
+            MediaKind.UNKNOWN -> normalized
+        }
     }
 
     /**
@@ -610,26 +626,36 @@ class WebDavClient(
 
         private val DATE_TIME_TOKEN_REGEX = Regex("(\\d{8}_\\d{6}|\\d{4}-\\d{2}-\\d{2}[ _-]\\d{2}[-:]\\d{2}[-:]\\d{2})")
         private val DATE_TOKEN_REGEX = Regex("(\\d{8}|\\d{4}-\\d{2}-\\d{2})")
-        private val IMAGE_FILE_EXTENSIONS = setOf(
-            "jpg",
-            "jpeg",
-            "png",
-            "gif",
-            "bmp",
-            "webp",
-            "heic",
-            "heif",
-            "avif",
-            "tif",
-            "tiff",
-            "dng",
-            "raw",
-            "arw",
-            "cr2",
-            "cr3",
-            "nef",
-            "orf",
-            "rw2",
+        private val GENERIC_MIME_TYPES = setOf(
+            "application/octet-stream",
+            "binary/octet-stream",
+        )
+        private val IMAGE_EXTENSION_TO_MIME = mapOf(
+            "jpg" to "image/jpeg",
+            "jpeg" to "image/jpeg",
+            "png" to "image/png",
+            "gif" to "image/gif",
+            "bmp" to "image/bmp",
+            "webp" to "image/webp",
+            "heic" to "image/heic",
+            "heif" to "image/heif",
+            "avif" to "image/avif",
+            "tif" to "image/tiff",
+            "tiff" to "image/tiff",
+            "dng" to "image/x-adobe-dng",
+            "raw" to "image/x-raw",
+            "arw" to "image/x-sony-arw",
+            "cr2" to "image/x-canon-cr2",
+            "cr3" to "image/x-canon-cr3",
+            "nef" to "image/x-nikon-nef",
+            "orf" to "image/x-olympus-orf",
+            "rw2" to "image/x-panasonic-rw2",
+        )
+        private val VIDEO_EXTENSION_TO_MIME = mapOf(
+            "mp4" to "video/mp4",
+            "m4v" to "video/x-m4v",
+            "mov" to "video/quicktime",
+            "webm" to "video/webm",
         )
         private val SKIPPED_MEDIA_SCAN_FOLDERS = setOf(
             "thumbnails",

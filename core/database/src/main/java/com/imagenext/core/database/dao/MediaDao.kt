@@ -9,7 +9,14 @@ import com.imagenext.core.database.entity.MediaItemEntity
 import com.imagenext.core.database.entity.THUMBNAIL_STATUS_FAILED
 import com.imagenext.core.database.entity.THUMBNAIL_STATUS_PENDING
 import com.imagenext.core.database.entity.THUMBNAIL_STATUS_READY
+import com.imagenext.core.database.entity.THUMBNAIL_STATUS_SKIPPED
 import kotlinx.coroutines.flow.Flow
+
+/** Lightweight projection for READY thumbnail reconciliation. */
+data class ReadyThumbnailReference(
+    val remotePath: String,
+    val thumbnailPath: String,
+)
 
 /**
  * Data access object for media items.
@@ -67,6 +74,15 @@ interface MediaDao {
     )
     suspend fun markThumbnailReady(remotePath: String, thumbnailPath: String)
 
+    /** Returns READY items that currently reference an on-disk thumbnail path. */
+    @Query(
+        "SELECT remotePath, thumbnailPath FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_READY' " +
+            "AND thumbnailPath IS NOT NULL " +
+            "AND thumbnailPath != ''"
+    )
+    suspend fun getReadyThumbnailReferences(): List<ReadyThumbnailReference>
+
     /** Marks a thumbnail fetch as failed and increments retry count. */
     @Query(
         "UPDATE media_items " +
@@ -76,6 +92,17 @@ interface MediaDao {
             "WHERE remotePath = :remotePath"
     )
     suspend fun markThumbnailFailed(remotePath: String, errorCode: String)
+
+    /** Marks thumbnail generation as intentionally skipped for unsupported media. */
+    @Query(
+        "UPDATE media_items " +
+            "SET thumbnailPath = NULL, " +
+            "thumbnailStatus = '$THUMBNAIL_STATUS_SKIPPED', " +
+            "thumbnailRetryCount = 0, " +
+            "thumbnailLastError = :reasonCode " +
+            "WHERE remotePath = :remotePath"
+    )
+    suspend fun markThumbnailSkipped(remotePath: String, reasonCode: String)
 
     /** Resets thumbnail state to pending when metadata changes invalidate cache. */
     @Query(
@@ -161,6 +188,25 @@ interface MediaDao {
             "AND thumbnailLastError = :errorCode"
     )
     suspend fun requeueExhaustedThumbnailFailuresByError(maxRetryCount: Int, errorCode: String): Int
+
+    /** Re-queues skipped video thumbnails for retry (used after fallback behavior upgrades). */
+    @Query(
+        "UPDATE media_items " +
+            "SET thumbnailStatus = '$THUMBNAIL_STATUS_PENDING', " +
+            "thumbnailRetryCount = 0, " +
+            "thumbnailLastError = NULL " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_SKIPPED' " +
+            "AND mimeType LIKE 'video/%'"
+    )
+    suspend fun requeueSkippedVideoThumbnails(): Int
+
+    /** Returns count of skipped video thumbnails. */
+    @Query(
+        "SELECT COUNT(*) FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_SKIPPED' " +
+            "AND mimeType LIKE 'video/%'"
+    )
+    suspend fun getSkippedVideoThumbnailCount(): Int
 
     /** Paged timeline query ordered by timeline date (newest first). */
     @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC")

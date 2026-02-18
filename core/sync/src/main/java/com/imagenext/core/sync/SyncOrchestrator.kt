@@ -12,6 +12,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.imagenext.core.database.AppDatabase
+import com.imagenext.core.database.dao.ReadyThumbnailReference
 import com.imagenext.core.model.SyncState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +24,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -43,6 +46,9 @@ class SyncOrchestrator(
 
     private val workManager = WorkManager.getInstance(context)
     private val mediaDao by lazy { AppDatabase.getInstance(context).mediaDao() }
+    private val syncPrefs by lazy {
+        context.getSharedPreferences(SYNC_PREFS_NAME, Context.MODE_PRIVATE)
+    }
 
     private val _syncState = MutableStateFlow(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
@@ -193,6 +199,10 @@ class SyncOrchestrator(
      * Used by Photos entry to self-heal partially indexed libraries.
      */
     suspend fun scheduleThumbnailBackfillIfNeeded(requeueExhaustedFailures: Boolean = false) {
+        applyOneTimeNoFullPhotoCacheMigrationIfNeeded()
+        applyOneTimeImageThumbnailTranscodeRetryV2IfNeeded()
+        applyOneTimeSkippedVideoRequeueIfNeeded()
+
         if (requeueExhaustedFailures) {
             withContext(Dispatchers.IO) {
                 mediaDao.requeueExhaustedThumbnailFailures(ThumbnailWorker.MAX_RETRY_ATTEMPTS)
@@ -220,6 +230,68 @@ class SyncOrchestrator(
             ExistingWorkPolicy.KEEP,
             createThumbnailRequest(constraints),
         )
+    }
+
+    private suspend fun applyOneTimeNoFullPhotoCacheMigrationIfNeeded() {
+        if (syncPrefs.getBoolean(KEY_NO_FULL_PHOTO_CACHE_V1_APPLIED, false)) return
+
+        try {
+            val stats = withContext(Dispatchers.IO) {
+                val remoteCacheCleanup = clearLegacyRemoteImageDiskCaches(
+                    cacheRootDir = context.cacheDir,
+                    legacyDirNames = LEGACY_REMOTE_IMAGE_CACHE_DIR_NAMES,
+                )
+                val thumbnailReset = reconcileReadyThumbnailReferences(
+                    references = mediaDao.getReadyThumbnailReferences(),
+                    thumbnailCacheDir = File(context.cacheDir, ThumbnailWorker.THUMBNAIL_DIR),
+                    maxThumbnailBytes = MAX_PERSISTED_THUMBNAIL_BYTES,
+                    resetThumbnailState = mediaDao::resetThumbnailState,
+                )
+                NoFullPhotoCacheMigrationStats(
+                    clearedRemoteDirs = remoteCacheCleanup.clearedDirCount,
+                    resetThumbnailCount = thumbnailReset.resetCount,
+                    deletedBytes = remoteCacheCleanup.deletedBytes + thumbnailReset.deletedBytes,
+                )
+            }
+
+            syncPrefs.edit().putBoolean(KEY_NO_FULL_PHOTO_CACHE_V1_APPLIED, true).apply()
+            logPerf(
+                "sync_no_full_photo_cache_v1 " +
+                    "clearedRemoteDirs=${stats.clearedRemoteDirs} " +
+                    "resetThumbs=${stats.resetThumbnailCount} " +
+                    "deletedBytes=${stats.deletedBytes}"
+            )
+        } catch (e: Exception) {
+            logPerf("sync_no_full_photo_cache_v1_retry reason=${e.javaClass.simpleName}")
+        }
+    }
+
+    private suspend fun applyOneTimeImageThumbnailTranscodeRetryV2IfNeeded() {
+        if (syncPrefs.getBoolean(KEY_IMAGE_THUMBNAIL_TRANSCODE_RETRY_V2_APPLIED, false)) return
+
+        val requeued = withContext(Dispatchers.IO) {
+            mediaDao.requeueExhaustedThumbnailFailures(ThumbnailWorker.MAX_RETRY_ATTEMPTS)
+        }
+        syncPrefs.edit().putBoolean(KEY_IMAGE_THUMBNAIL_TRANSCODE_RETRY_V2_APPLIED, true).apply()
+        logPerf("sync_image_thumb_transcode_retry_v2 requeuedExhausted=$requeued")
+    }
+
+    private suspend fun applyOneTimeSkippedVideoRequeueIfNeeded() {
+        if (syncPrefs.getBoolean(KEY_VIDEO_SKIPPED_REQUEUE_V1_APPLIED, false)) return
+
+        val skippedBefore = withContext(Dispatchers.IO) {
+            mediaDao.getSkippedVideoThumbnailCount()
+        }
+        val requeued = if (skippedBefore > 0) {
+            withContext(Dispatchers.IO) {
+                mediaDao.requeueSkippedVideoThumbnails()
+            }
+        } else {
+            0
+        }
+
+        syncPrefs.edit().putBoolean(KEY_VIDEO_SKIPPED_REQUEUE_V1_APPLIED, true).apply()
+        logPerf("sync_video_skipped_requeue_once skippedBefore=$skippedBefore requeued=$requeued")
     }
 
     /**
@@ -385,9 +457,112 @@ class SyncOrchestrator(
         val errorCount: Int,
     )
 
+    private data class NoFullPhotoCacheMigrationStats(
+        val clearedRemoteDirs: Int,
+        val resetThumbnailCount: Int,
+        val deletedBytes: Long,
+    )
+
     private companion object {
         const val PERF_TAG = "ImageNextPerf"
         const val TRANSIENT_ERROR_UNREACHABLE = "unreachable"
         const val AUTO_SYNC_INTERVAL_MINUTES = 15L
+        const val SYNC_PREFS_NAME = "sync_orchestrator_prefs"
+        const val KEY_VIDEO_SKIPPED_REQUEUE_V1_APPLIED = "video_skipped_requeue_v1_applied"
+        const val KEY_NO_FULL_PHOTO_CACHE_V1_APPLIED = "no_full_photo_cache_v1_applied"
+        const val KEY_IMAGE_THUMBNAIL_TRANSCODE_RETRY_V2_APPLIED = "image_thumbnail_transcode_retry_v2_applied"
+        const val MAX_PERSISTED_THUMBNAIL_BYTES = 1_048_576L
+        val LEGACY_REMOTE_IMAGE_CACHE_DIR_NAMES = listOf("image_cache", "coil_image_cache")
     }
+}
+
+internal data class RemoteCacheCleanupStats(
+    val clearedDirCount: Int,
+    val deletedBytes: Long,
+)
+
+internal data class ThumbnailReconciliationStats(
+    val resetCount: Int,
+    val deletedBytes: Long,
+)
+
+internal fun clearLegacyRemoteImageDiskCaches(
+    cacheRootDir: File,
+    legacyDirNames: List<String>,
+): RemoteCacheCleanupStats {
+    var clearedDirCount = 0
+    var deletedBytes = 0L
+
+    for (dirName in legacyDirNames) {
+        val candidate = File(cacheRootDir, dirName)
+        if (!candidate.exists()) continue
+
+        val candidateBytes = candidate.safeSizeBytes()
+        if (!candidate.deleteRecursively() && candidate.exists()) {
+            throw IOException("Failed to clear legacy remote cache dir: ${candidate.absolutePath}")
+        }
+        clearedDirCount++
+        deletedBytes += candidateBytes
+    }
+
+    return RemoteCacheCleanupStats(
+        clearedDirCount = clearedDirCount,
+        deletedBytes = deletedBytes,
+    )
+}
+
+internal suspend fun reconcileReadyThumbnailReferences(
+    references: List<ReadyThumbnailReference>,
+    thumbnailCacheDir: File,
+    maxThumbnailBytes: Long,
+    resetThumbnailState: suspend (String) -> Unit,
+): ThumbnailReconciliationStats {
+    var resetCount = 0
+    var deletedBytes = 0L
+
+    for (reference in references) {
+        val thumbnailFile = File(reference.thumbnailPath)
+        if (!thumbnailFile.isWithinDirectory(thumbnailCacheDir)) continue
+
+        val exists = thumbnailFile.exists()
+        val shouldReset = !exists || thumbnailFile.length() > maxThumbnailBytes
+        if (!shouldReset) continue
+
+        if (exists) {
+            val bytes = thumbnailFile.length()
+            if (!thumbnailFile.delete() && thumbnailFile.exists()) {
+                throw IOException("Failed to delete oversized thumbnail: ${thumbnailFile.absolutePath}")
+            }
+            deletedBytes += bytes
+        }
+
+        resetThumbnailState(reference.remotePath)
+        resetCount++
+    }
+
+    return ThumbnailReconciliationStats(
+        resetCount = resetCount,
+        deletedBytes = deletedBytes,
+    )
+}
+
+private fun File.isWithinDirectory(rootDir: File): Boolean {
+    return try {
+        val candidatePath = canonicalFile.toPath().normalize()
+        val rootPath = rootDir.canonicalFile.toPath().normalize()
+        candidatePath.startsWith(rootPath)
+    } catch (_: IOException) {
+        false
+    }
+}
+
+private fun File.safeSizeBytes(): Long {
+    if (!exists()) return 0L
+    if (isFile) return length()
+
+    var bytes = 0L
+    walkTopDown().forEach { file ->
+        if (file.isFile) bytes += file.length()
+    }
+    return bytes
 }
