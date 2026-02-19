@@ -28,14 +28,14 @@ data class ReadyThumbnailReference(
 interface MediaDao {
 
     /** Observes all media items ordered by timeline date (newest first). */
-    @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC")
+    @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC, remotePath DESC")
     fun getAllMedia(): Flow<List<MediaItemEntity>>
 
     /** Observes media items for a specific folder. */
     @Query(
         "SELECT * FROM media_items " +
             "WHERE folderPath = :folderPath " +
-            "ORDER BY timelineSortKey DESC"
+            "ORDER BY timelineSortKey DESC, remotePath DESC"
     )
     fun getMediaByFolder(folderPath: String): Flow<List<MediaItemEntity>>
 
@@ -46,6 +46,10 @@ interface MediaDao {
     /** Deletes all media items belonging to a specific folder. */
     @Query("DELETE FROM media_items WHERE folderPath = :folderPath")
     suspend fun deleteByFolder(folderPath: String)
+
+    /** Deletes macOS AppleDouble sidecar records (._*) for a specific folder. */
+    @Query("DELETE FROM media_items WHERE folderPath = :folderPath AND fileName LIKE '._%'")
+    suspend fun deleteAppleDoubleByFolder(folderPath: String)
 
     /** Returns the total count of media items. */
     @Query("SELECT COUNT(*) FROM media_items")
@@ -58,7 +62,7 @@ interface MediaDao {
             "OR (thumbnailStatus = '$THUMBNAIL_STATUS_FAILED' AND thumbnailRetryCount < :maxRetryCount) " +
             "ORDER BY CASE thumbnailStatus " +
             "WHEN '$THUMBNAIL_STATUS_PENDING' THEN 0 ELSE 1 END, " +
-            "timelineSortKey DESC " +
+            "timelineSortKey DESC, remotePath DESC " +
             "LIMIT :limit"
     )
     suspend fun getItemsNeedingThumbnail(limit: Int, maxRetryCount: Int): List<MediaItemEntity>
@@ -209,15 +213,15 @@ interface MediaDao {
     suspend fun getSkippedVideoThumbnailCount(): Int
 
     /** Paged timeline query ordered by timeline date (newest first). */
-    @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC")
+    @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC, remotePath DESC")
     fun getTimelinePaged(): PagingSource<Int, MediaItemEntity>
 
     /** Paged query for all photo-type media. */
-    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'image/%' ORDER BY timelineSortKey DESC")
+    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'image/%' ORDER BY timelineSortKey DESC, remotePath DESC")
     fun getPhotosPaged(): PagingSource<Int, MediaItemEntity>
 
     /** Paged query for all video-type media. */
-    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'video/%' ORDER BY timelineSortKey DESC")
+    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'video/%' ORDER BY timelineSortKey DESC, remotePath DESC")
     fun getVideosPaged(): PagingSource<Int, MediaItemEntity>
 
     /** Paged query for media items belonging to a specific manual album. */
@@ -225,7 +229,7 @@ interface MediaDao {
         "SELECT m.* FROM media_items m " +
             "INNER JOIN album_media_cross_ref am ON am.mediaRemotePath = m.remotePath " +
             "WHERE am.albumId = :albumId " +
-            "ORDER BY m.timelineSortKey DESC"
+            "ORDER BY m.timelineSortKey DESC, m.remotePath DESC"
     )
     fun getAlbumMediaPaged(albumId: Long): PagingSource<Int, MediaItemEntity>
 
@@ -234,15 +238,15 @@ interface MediaDao {
     suspend fun getByRemotePath(remotePath: String): MediaItemEntity?
 
     /** Returns all media items ordered by timeline date descending (for viewer index lookup). */
-    @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC")
+    @Query("SELECT * FROM media_items ORDER BY timelineSortKey DESC, remotePath DESC")
     suspend fun getAllMediaList(): List<MediaItemEntity>
 
     /** Returns all photos ordered by timeline date descending. */
-    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'image/%' ORDER BY timelineSortKey DESC")
+    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'image/%' ORDER BY timelineSortKey DESC, remotePath DESC")
     suspend fun getPhotosList(): List<MediaItemEntity>
 
     /** Returns all videos ordered by timeline date descending. */
-    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'video/%' ORDER BY timelineSortKey DESC")
+    @Query("SELECT * FROM media_items WHERE mimeType LIKE 'video/%' ORDER BY timelineSortKey DESC, remotePath DESC")
     suspend fun getVideosList(): List<MediaItemEntity>
 
     /** Returns media items for a specific manual album ordered by timeline date descending. */
@@ -250,7 +254,7 @@ interface MediaDao {
         "SELECT m.* FROM media_items m " +
             "INNER JOIN album_media_cross_ref am ON am.mediaRemotePath = m.remotePath " +
             "WHERE am.albumId = :albumId " +
-            "ORDER BY m.timelineSortKey DESC"
+            "ORDER BY m.timelineSortKey DESC, m.remotePath DESC"
     )
     suspend fun getAlbumMediaList(albumId: Long): List<MediaItemEntity>
 

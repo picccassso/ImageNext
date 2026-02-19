@@ -127,7 +127,8 @@ class LibrarySyncWorker(
                                         existing.etag == item.etag &&
                                         existing.size == item.size &&
                                         existing.lastModified == item.lastModified &&
-                                        existing.captureTimestamp == mergedCaptureTimestamp
+                                        existing.captureTimestamp == mergedCaptureTimestamp &&
+                                        existing.fileId == item.fileId
                                     val preserveThumbnail = metadataUnchanged && !existing.thumbnailPath.isNullOrBlank()
 
                                     MediaItemEntity(
@@ -139,6 +140,7 @@ class LibrarySyncWorker(
                                         captureTimestamp = mergedCaptureTimestamp,
                                         timelineSortKey = timelineSortKey,
                                         etag = item.etag,
+                                        fileId = item.fileId,
                                         folderPath = item.folderPath,
                                         thumbnailPath = if (preserveThumbnail) existing.thumbnailPath else null,
                                         thumbnailStatus = if (preserveThumbnail) {
@@ -152,6 +154,8 @@ class LibrarySyncWorker(
                                 }
 
                                 mediaDao.upsertAll(entities)
+                                // Purge legacy AppleDouble sidecar rows from prior syncs.
+                                mediaDao.deleteAppleDoubleByFolder(folder.remotePath)
                                 totalSynced.addAndGet(entities.size)
                                 val upsertDurationMs = elapsedSince(upsertStartMs)
                                 logPerf(
@@ -349,7 +353,7 @@ class LibrarySyncWorker(
 
         private const val PERF_TAG = "ImageNextPerf"
         private const val REMOTE_PATH_LOOKUP_CHUNK_SIZE = 400
-        private const val FOLDER_SCAN_CONCURRENCY = 2
+        private const val FOLDER_SCAN_CONCURRENCY = 4
         private const val MAX_TRANSIENT_ALL_FOLDER_RETRY_ATTEMPTS = 3
 
         private const val ERROR_CATEGORY_TRANSIENT = "transient"

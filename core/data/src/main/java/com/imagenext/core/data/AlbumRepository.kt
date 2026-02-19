@@ -289,6 +289,7 @@ private fun MediaItemEntity.toDomainModel(): MediaItem {
         lastModified = lastModified,
         captureTimestamp = captureTimestamp,
         etag = etag,
+        fileId = fileId,
         thumbnailPath = thumbnailPath,
         folderPath = folderPath,
     )

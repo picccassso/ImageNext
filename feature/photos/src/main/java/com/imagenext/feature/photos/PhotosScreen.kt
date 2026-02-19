@@ -133,6 +133,7 @@ fun PhotosScreen(
     val pagingItems = viewModel.timelineItems.collectAsLazyPagingItems()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
     val albumPickerItems by viewModel.albumPickerItems.collectAsStateWithLifecycle()
+    val pendingReturnAnchor by viewModel.pendingReturnAnchor.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingAlbumTarget by remember { mutableStateOf<MediaItem?>(null) }
     var createAlbumTarget by remember { mutableStateOf<MediaItem?>(null) }
@@ -165,9 +166,13 @@ fun PhotosScreen(
     val isRefreshing =
         syncState == SyncState.Running ||
             (pagingItems.loadState.refresh is LoadState.Loading && pagingItems.itemCount > 0)
+    val isSyncActive = syncState == SyncState.Running || syncState == SyncState.Partial
+    val canTriggerManualRefresh =
+        !isSyncActive && pagingItems.loadState.refresh !is LoadState.Loading
     val pullRefreshState = rememberPullRefreshState(
         refreshing = isRefreshing,
         onRefresh = {
+            if (!canTriggerManualRefresh) return@rememberPullRefreshState
             viewModel.refreshPhotos()
             pagingItems.refresh()
         },
@@ -208,11 +213,28 @@ fun PhotosScreen(
         }
     }
 
+    LaunchedEffect(pendingReturnAnchor, pagingItems.itemCount) {
+        val anchor = pendingReturnAnchor ?: return@LaunchedEffect
+        if (!anchor.readyToApply) return@LaunchedEffect
+        if (pagingItems.itemCount <= 0) return@LaunchedEffect
+
+        val targetIndex = findTimelineIndexForRemotePath(pagingItems, anchor.remotePath)
+        if (targetIndex < 0) return@LaunchedEffect
+
+        val safeIndex = anchor.firstVisibleItemIndex.coerceIn(0, pagingItems.itemCount - 1)
+        val safeOffset = anchor.firstVisibleItemScrollOffset.coerceAtLeast(0)
+        gridState.scrollToItem(index = safeIndex, scrollOffset = safeOffset)
+        viewModel.onReturnAnchorApplied()
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .pullRefresh(pullRefreshState),
+            .pullRefresh(
+                state = pullRefreshState,
+                enabled = canTriggerManualRefresh,
+            ),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             SyncStatusBar(syncState = syncState)
@@ -236,7 +258,14 @@ fun PhotosScreen(
                         gridState = gridState,
                         flingBehavior = gridFlingBehavior,
                         allowRemotePreview = allowRemotePreview,
-                        onMediaClick = onMediaClick,
+                        onMediaClick = { request ->
+                            viewModel.onMediaOpened(
+                                remotePath = request.remotePath,
+                                firstVisibleItemIndex = gridState.firstVisibleItemIndex,
+                                firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
+                            )
+                            onMediaClick(request)
+                        },
                         onMediaLongClick = { mediaItem ->
                             pendingAlbumTarget = mediaItem
                         },
@@ -659,6 +688,7 @@ private fun resolveGridImageModel(
     val previewUrl = buildPreviewUrl(
         serverUrl = remotePreviewAuth?.serverUrl ?: return null,
         remotePath = mediaItem.remotePath,
+        fileId = mediaItem.fileId,
     )
 
     return ImageRequest.Builder(context)
@@ -666,17 +696,21 @@ private fun resolveGridImageModel(
         .httpHeaders(
             NetworkHeaders.Builder()
                 .set("Authorization", remotePreviewAuth.authHeader)
-                .set("OCS-APIRequest", "true")
                 .build()
         )
         .diskCachePolicy(CachePolicy.DISABLED)
         .build()
 }
 
-private fun buildPreviewUrl(serverUrl: String, remotePath: String): String {
-    val encodedPath = URLEncoder.encode(remotePath, StandardCharsets.UTF_8.name())
-        .replace("+", "%20")
-    return "$serverUrl/index.php/core/preview?file=$encodedPath&x=$GRID_PREVIEW_SIZE&y=$GRID_PREVIEW_SIZE&a=1"
+private fun buildPreviewUrl(serverUrl: String, remotePath: String, fileId: Long?): String {
+    val query = if (fileId != null && fileId > 0L) {
+        "fileId=$fileId"
+    } else {
+        val encodedPath = URLEncoder.encode(remotePath, StandardCharsets.UTF_8.name())
+            .replace("+", "%20")
+        "file=$encodedPath"
+    }
+    return "$serverUrl/index.php/core/preview?$query&x=$GRID_PREVIEW_SIZE&y=$GRID_PREVIEW_SIZE&a=1&mode=cover&forceIcon=0"
 }
 
 private fun buildBasicAuthHeader(username: String, password: String): String {
@@ -688,6 +722,19 @@ private data class RemotePreviewAuth(
     val serverUrl: String,
     val authHeader: String,
 )
+
+private fun findTimelineIndexForRemotePath(
+    pagingItems: LazyPagingItems<TimelineItem>,
+    remotePath: String,
+): Int {
+    for (index in 0 until pagingItems.itemCount) {
+        val item = pagingItems.peek(index) ?: continue
+        if (item is TimelineItem.Media && item.mediaItem.remotePath == remotePath) {
+            return index
+        }
+    }
+    return -1
+}
 
 private class VelocityCappedFlingBehavior(
     private val delegate: FlingBehavior,

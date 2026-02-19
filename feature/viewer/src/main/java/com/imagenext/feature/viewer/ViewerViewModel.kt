@@ -84,7 +84,9 @@ class ViewerViewModel(
         showMetadata: Boolean = false,
     ): ViewerUiState.Content {
         val currentItem = items[index]
-        val currentSource = viewerRepository.getRemoteMediaSource(currentItem.remotePath)?.toUiSource()
+        val currentSource = viewerRepository
+            .getRemoteMediaSource(remotePath = currentItem.remotePath, fileId = currentItem.fileId)
+            ?.toUiSource()
         val prefetchSources = buildAdjacentImageSources(items = items, centerIndex = index)
 
         return ViewerUiState.Content(
@@ -110,7 +112,12 @@ class ViewerViewModel(
             .filter { it != centerIndex }
             .map { index -> items[index] }
             .filter { item -> item.isImage }
-            .mapNotNull { item -> viewerRepository.getRemoteMediaSource(item.remotePath) }
+            .mapNotNull { item ->
+                viewerRepository.getRemoteMediaSource(
+                    remotePath = item.remotePath,
+                    fileId = item.fileId,
+                )
+            }
             .map { source -> source.toUiSource() }
             .toList()
     }

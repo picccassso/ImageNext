@@ -27,7 +27,7 @@ import com.imagenext.core.database.entity.UploadedMediaRegistryEntity
  * Room database root for ImageNext.
  *
  * Contains entities for media metadata, folder selections, sync checkpoints, and local albums.
- * Version 8 — adds SAF-backed local backup folder selections.
+ * Version 9 — adds Nextcloud fileId tracking on media items for preview APIs.
  *
  * Migration policy: future schema changes should use Room's migration API
  * to preserve user data across app updates.
@@ -44,7 +44,7 @@ import com.imagenext.core.database.entity.UploadedMediaRegistryEntity
         LocalBackupAlbumEntity::class,
         LocalBackupFolderEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -81,6 +81,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(MIGRATION_5_6)
                     .addMigrations(MIGRATION_6_7)
                     .addMigrations(MIGRATION_7_8)
+                    .addMigrations(MIGRATION_8_9)
                     .build()
                     .also { INSTANCE = it }
             }
@@ -289,6 +290,14 @@ abstract class AppDatabase : RoomDatabase() {
                         "`displayName` TEXT NOT NULL, " +
                         "`addedAt` INTEGER NOT NULL, " +
                         "PRIMARY KEY(`treeUri`))"
+                )
+            }
+        }
+
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE media_items ADD COLUMN fileId INTEGER"
                 )
             }
         }

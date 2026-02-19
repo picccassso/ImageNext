@@ -46,6 +46,7 @@ class TimelineRepository(
                     lastModified = entity.lastModified,
                     captureTimestamp = entity.captureTimestamp,
                     etag = entity.etag,
+                    fileId = entity.fileId,
                     thumbnailPath = entity.thumbnailPath,
                     folderPath = entity.folderPath,
                 )

@@ -57,6 +57,13 @@ class ThumbnailWorkerPolicyTest {
     }
 
     @Test
+    fun `remote video frame fallback is limited to bounded file sizes`() {
+        assertTrue(ThumbnailWorker.shouldAttemptRemoteVideoFrameExtraction(0L))
+        assertTrue(ThumbnailWorker.shouldAttemptRemoteVideoFrameExtraction(50L * 1024L * 1024L))
+        assertFalse(ThumbnailWorker.shouldAttemptRemoteVideoFrameExtraction(200L * 1024L * 1024L))
+    }
+
+    @Test
     fun `local frame failure classification retries connectivity errors`() {
         assertTrue(
             ThumbnailWorker.classifyLocalVideoFrameFailure(UnknownHostException("host")) ==

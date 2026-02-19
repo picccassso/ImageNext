@@ -1,9 +1,12 @@
 package com.imagenext.feature.photos
 
 import android.os.SystemClock
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.paging.insertSeparators
@@ -36,8 +39,11 @@ class PhotosViewModel(
     timelineRepository: TimelineRepository,
     private val syncOrchestrator: SyncOrchestrator,
     private val albumRepository: AlbumRepository,
+    private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     private var lastForegroundSyncRequestElapsedMs = 0L
+    private var suppressNextForegroundSync: Boolean =
+        savedStateHandle[KEY_SUPPRESS_NEXT_FOREGROUND_SYNC] ?: false
 
     /** Paged timeline items with in-stream date headers, cached across config changes. */
     val timelineItems: Flow<PagingData<TimelineItem>> =
@@ -72,6 +78,9 @@ class PhotosViewModel(
     private val _albumPickerItems = MutableStateFlow<List<AlbumPickerItem>>(emptyList())
     val albumPickerItems: StateFlow<List<AlbumPickerItem>> = _albumPickerItems.asStateFlow()
 
+    private val _pendingReturnAnchor = MutableStateFlow(loadSavedReturnAnchor())
+    val pendingReturnAnchor: StateFlow<ReturnAnchor?> = _pendingReturnAnchor.asStateFlow()
+
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
@@ -93,6 +102,15 @@ class PhotosViewModel(
     }
 
     fun onPhotosForegrounded() {
+        if (suppressNextForegroundSync) {
+            suppressNextForegroundSync = false
+            savedStateHandle[KEY_SUPPRESS_NEXT_FOREGROUND_SYNC] = false
+            _pendingReturnAnchor.value = _pendingReturnAnchor.value?.copy(readyToApply = true).also {
+                persistReturnAnchor(it)
+            }
+            return
+        }
+
         val now = SystemClock.elapsedRealtime()
         if (now - lastForegroundSyncRequestElapsedMs < FOREGROUND_SYNC_MIN_INTERVAL_MS) return
         lastForegroundSyncRequestElapsedMs = now
@@ -100,6 +118,54 @@ class PhotosViewModel(
         // Perform a foreground freshness check when Photos is entered/resumed.
         // KEEP policy avoids replacing an already running metadata sync.
         syncOrchestrator.requestSyncNow()
+    }
+
+    fun onMediaOpened(
+        remotePath: String,
+        firstVisibleItemIndex: Int,
+        firstVisibleItemScrollOffset: Int,
+    ) {
+        suppressNextForegroundSync = true
+        savedStateHandle[KEY_SUPPRESS_NEXT_FOREGROUND_SYNC] = true
+        _pendingReturnAnchor.value = ReturnAnchor(
+            remotePath = remotePath,
+            firstVisibleItemIndex = firstVisibleItemIndex,
+            firstVisibleItemScrollOffset = firstVisibleItemScrollOffset,
+            readyToApply = false,
+        ).also { persistReturnAnchor(it) }
+    }
+
+    fun onReturnAnchorApplied() {
+        _pendingReturnAnchor.value = null
+        persistReturnAnchor(null)
+    }
+
+    private fun loadSavedReturnAnchor(): ReturnAnchor? {
+        val remotePath = savedStateHandle.get<String>(KEY_RETURN_ANCHOR_REMOTE_PATH) ?: return null
+        val index = savedStateHandle.get<Int>(KEY_RETURN_ANCHOR_FIRST_VISIBLE_INDEX) ?: 0
+        val offset = savedStateHandle.get<Int>(KEY_RETURN_ANCHOR_FIRST_VISIBLE_OFFSET) ?: 0
+        val ready = savedStateHandle.get<Boolean>(KEY_RETURN_ANCHOR_READY) ?: false
+        return ReturnAnchor(
+            remotePath = remotePath,
+            firstVisibleItemIndex = index,
+            firstVisibleItemScrollOffset = offset,
+            readyToApply = ready,
+        )
+    }
+
+    private fun persistReturnAnchor(anchor: ReturnAnchor?) {
+        if (anchor == null) {
+            savedStateHandle.remove<String>(KEY_RETURN_ANCHOR_REMOTE_PATH)
+            savedStateHandle.remove<Int>(KEY_RETURN_ANCHOR_FIRST_VISIBLE_INDEX)
+            savedStateHandle.remove<Int>(KEY_RETURN_ANCHOR_FIRST_VISIBLE_OFFSET)
+            savedStateHandle.remove<Boolean>(KEY_RETURN_ANCHOR_READY)
+            return
+        }
+
+        savedStateHandle[KEY_RETURN_ANCHOR_REMOTE_PATH] = anchor.remotePath
+        savedStateHandle[KEY_RETURN_ANCHOR_FIRST_VISIBLE_INDEX] = anchor.firstVisibleItemIndex
+        savedStateHandle[KEY_RETURN_ANCHOR_FIRST_VISIBLE_OFFSET] = anchor.firstVisibleItemScrollOffset
+        savedStateHandle[KEY_RETURN_ANCHOR_READY] = anchor.readyToApply
     }
 
     private fun triggerThumbnailBackfillIfNeeded() {
@@ -168,8 +234,20 @@ class PhotosViewModel(
     private companion object {
         const val INITIAL_BACKFILL_DELAY_MS = 2500L
         const val FOREGROUND_SYNC_MIN_INTERVAL_MS = 45_000L
+        const val KEY_SUPPRESS_NEXT_FOREGROUND_SYNC = "photos.suppress_next_foreground_sync"
+        const val KEY_RETURN_ANCHOR_REMOTE_PATH = "photos.return_anchor.remote_path"
+        const val KEY_RETURN_ANCHOR_FIRST_VISIBLE_INDEX = "photos.return_anchor.first_visible_index"
+        const val KEY_RETURN_ANCHOR_FIRST_VISIBLE_OFFSET = "photos.return_anchor.first_visible_offset"
+        const val KEY_RETURN_ANCHOR_READY = "photos.return_anchor.ready"
     }
 }
+
+data class ReturnAnchor(
+    val remotePath: String,
+    val firstVisibleItemIndex: Int,
+    val firstVisibleItemScrollOffset: Int,
+    val readyToApply: Boolean,
+)
 
 /**
  * Factory for [PhotosViewModel] to support creation through
@@ -181,11 +259,22 @@ class PhotosViewModelFactory(
     private val albumRepository: AlbumRepository,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+        return PhotosViewModel(
+            timelineRepository = timelineRepository,
+            syncOrchestrator = syncOrchestrator,
+            albumRepository = albumRepository,
+            savedStateHandle = extras.createSavedStateHandle(),
+        ) as T
+    }
+
+    @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return PhotosViewModel(
             timelineRepository = timelineRepository,
             syncOrchestrator = syncOrchestrator,
             albumRepository = albumRepository,
+            savedStateHandle = SavedStateHandle(),
         ) as T
     }
 }

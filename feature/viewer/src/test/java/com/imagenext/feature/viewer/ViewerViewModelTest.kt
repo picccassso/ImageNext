@@ -299,7 +299,7 @@ private class FakeViewerRepository(
         return items
     }
 
-    override fun getRemoteMediaSource(remotePath: String): RemoteMediaSource? {
+    override fun getRemoteMediaSource(remotePath: String, fileId: Long?): RemoteMediaSource? {
         return RemoteMediaSource(
             remotePath = remotePath,
             fullResUrl = "https://example.com/full$remotePath",
@@ -318,6 +318,6 @@ private class FakeViewerRepository(
         val end = (centerIndex + window).coerceAtMost(items.lastIndex)
         return (start..end)
             .filter { it != centerIndex }
-            .map { index -> getRemoteMediaSource(items[index].remotePath)!! }
+            .map { index -> getRemoteMediaSource(items[index].remotePath, items[index].fileId)!! }
     }
 }

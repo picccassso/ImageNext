@@ -8,6 +8,7 @@ import com.imagenext.core.model.AuthSession
 import com.imagenext.core.model.SelectedFolder
 import com.imagenext.core.model.SyncState
 import com.imagenext.core.sync.SyncOrchestrator
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,7 +44,7 @@ class FolderSelectionViewModel(
     /** Sync state from orchestrator. */
     val syncState: StateFlow<SyncState> = syncOrchestrator.syncState
 
-    /** All discovered folders (unfiltered). */
+    /** Folders visible in picker after top-level/system filtering. */
     private var allFolders: List<SelectedFolder> = emptyList()
 
     init {
@@ -63,9 +64,9 @@ class FolderSelectionViewModel(
 
             when (result) {
                 is com.imagenext.core.network.webdav.WebDavClient.WebDavResult.Success -> {
-                    allFolders = result.data
+                    allFolders = prepareVisibleFolders(result.data)
                     _uiState.value = FolderSelectionUiState.Ready(
-                        folders = applySearchFilter(result.data),
+                        folders = applySearchFilter(allFolders),
                     )
                 }
                 is com.imagenext.core.network.webdav.WebDavClient.WebDavResult.Error -> {
@@ -122,6 +123,32 @@ class FolderSelectionViewModel(
         }
     }
 
+    private fun prepareVisibleFolders(folders: List<SelectedFolder>): List<SelectedFolder> {
+        return folders
+            .asSequence()
+            .filter(::isTopLevelFolder)
+            .filter(::isPickerVisibleFolder)
+            .distinctBy { it.remotePath }
+            .sortedBy { it.displayName.lowercase(Locale.US) }
+            .toList()
+    }
+
+    private fun isTopLevelFolder(folder: SelectedFolder): Boolean {
+        val trimmed = folder.remotePath.trim('/')
+        if (trimmed.isBlank()) return false
+        return !trimmed.contains('/')
+    }
+
+    private fun isPickerVisibleFolder(folder: SelectedFolder): Boolean {
+        val folderName = folder.remotePath
+            .trimEnd('/')
+            .substringAfterLast('/')
+            .lowercase(Locale.US)
+        if (folderName.isBlank()) return false
+        if (folderName.startsWith(".")) return false
+        return folderName !in SKIPPED_PICKER_FOLDERS
+    }
+
     private fun applySearchFilter(folders: List<SelectedFolder>): List<SelectedFolder> {
         val query = _searchQuery.value.trim()
         if (query.isBlank()) return folders
@@ -145,6 +172,17 @@ sealed interface FolderSelectionUiState {
     /** An error occurred during folder discovery. */
     data class Error(val message: String) : FolderSelectionUiState
 }
+
+private val SKIPPED_PICKER_FOLDERS = setOf(
+    "@eadir",
+    "thumbnails",
+    "cache",
+    "tmp",
+    "temp",
+    "trash",
+    "files_trashbin",
+    "files_versions",
+)
 
 /**
  * Factory for [FolderSelectionViewModel] to support creation through

@@ -46,6 +46,9 @@ data class MediaItemEntity(
     /** Server ETag for change detection. */
     val etag: String,
 
+    /** Nextcloud file identifier used for preview APIs, if known. */
+    val fileId: Long? = null,
+
     /** Local path to cached thumbnail, or null if not yet fetched. */
     val thumbnailPath: String? = null,
 

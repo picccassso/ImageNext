@@ -529,6 +529,7 @@ class WebDavClient(
                     <d:getcontentlength/>
                     <d:getlastmodified/>
                     <d:getetag/>
+                    <oc:fileid/>
                     <d:displayname/>
                 </d:prop>
             </d:propfind>
@@ -631,6 +632,7 @@ class WebDavClient(
         var contentLength: Long = 0
         var lastModified: String? = null
         var etag: String? = null
+        var fileId: Long? = null
         var currentTag = ""
 
         while (parser.eventType != XmlPullParser.END_DOCUMENT) {
@@ -646,6 +648,7 @@ class WebDavClient(
                             contentLength = 0
                             lastModified = null
                             etag = null
+                            fileId = null
                         }
                         "collection", "d:collection" -> {
                             if (inResponse) isCollection = true
@@ -663,6 +666,7 @@ class WebDavClient(
                             }
                             "getlastmodified", "d:getlastmodified" -> lastModified = text
                             "getetag", "d:getetag" -> etag = text
+                            "fileid", "oc:fileid" -> fileId = text.toLongOrNull()
                         }
                     }
                 }
@@ -671,23 +675,26 @@ class WebDavClient(
                         if (inResponse && !isCollection && href != null) {
                             val remotePath = extractRemotePath(href, loginName)
                             val fileName = remotePath.substringAfterLast('/')
-                            val mediaKind = resolveMediaKind(contentType, fileName)
-                            if (mediaKind != MediaKind.UNKNOWN) {
-                                val timestamp = parseHttpDate(lastModified)
-                                val captureTimestamp = parseCaptureTimestampFromFileName(fileName)
+                            if (!shouldSkipMediaFile(fileName)) {
+                                val mediaKind = resolveMediaKind(contentType, fileName)
+                                if (mediaKind != MediaKind.UNKNOWN) {
+                                    val timestamp = parseHttpDate(lastModified)
+                                    val captureTimestamp = parseCaptureTimestampFromFileName(fileName)
 
-                                items.add(
-                                    MediaItem(
-                                        remotePath = remotePath,
-                                        fileName = fileName,
-                                        mimeType = normalizeMimeType(contentType, fileName, mediaKind),
-                                        size = contentLength,
-                                        lastModified = timestamp,
-                                        captureTimestamp = captureTimestamp,
-                                        etag = etag.orEmpty().trim('"'),
-                                        folderPath = folderPath,
+                                    items.add(
+                                        MediaItem(
+                                            remotePath = remotePath,
+                                            fileName = fileName,
+                                            mimeType = normalizeMimeType(contentType, fileName, mediaKind),
+                                            size = contentLength,
+                                            lastModified = timestamp,
+                                            captureTimestamp = captureTimestamp,
+                                            etag = etag.orEmpty().trim('"'),
+                                            fileId = fileId,
+                                            folderPath = folderPath,
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                         inResponse = false
@@ -787,6 +794,12 @@ class WebDavClient(
         }
 
         return null
+    }
+
+    private fun shouldSkipMediaFile(fileName: String): Boolean {
+        // macOS AppleDouble sidecars (resource fork metadata) are not media files.
+        if (fileName.startsWith("._")) return true
+        return false
     }
 
     companion object {

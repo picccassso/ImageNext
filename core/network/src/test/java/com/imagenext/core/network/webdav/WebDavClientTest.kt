@@ -170,6 +170,31 @@ class WebDavClientTest {
     }
 
     @Test
+    fun `parseMediaItems captures fileId when present`() {
+        val xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+                <d:response>
+                    <d:href>/remote.php/dav/files/testuser/Photos/sunrise.jpg</d:href>
+                    <d:propstat>
+                        <d:prop>
+                            <d:resourcetype/>
+                            <d:getcontenttype>image/jpeg</d:getcontenttype>
+                            <d:getcontentlength>2048</d:getcontentlength>
+                            <oc:fileid>321</oc:fileid>
+                        </d:prop>
+                    </d:propstat>
+                </d:response>
+            </d:multistatus>
+        """.trimIndent()
+
+        val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
+
+        assertEquals(1, items.size)
+        assertEquals(321L, items[0].fileId)
+    }
+
+    @Test
     fun `parseMediaItems filters out collections`() {
         val xml = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -304,6 +329,39 @@ class WebDavClientTest {
 
         val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
         assertTrue(items.isEmpty())
+    }
+
+    @Test
+    fun `parseMediaItems skips AppleDouble sidecar files`() {
+        val xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <d:multistatus xmlns:d="DAV:">
+                <d:response>
+                    <d:href>/remote.php/dav/files/testuser/Photos/._Snapchat-833812098.mp4</d:href>
+                    <d:propstat>
+                        <d:prop>
+                            <d:resourcetype/>
+                            <d:getcontenttype>video/mp4</d:getcontenttype>
+                            <d:getcontentlength>4096</d:getcontentlength>
+                        </d:prop>
+                    </d:propstat>
+                </d:response>
+                <d:response>
+                    <d:href>/remote.php/dav/files/testuser/Photos/Snapchat-833812098.mp4</d:href>
+                    <d:propstat>
+                        <d:prop>
+                            <d:resourcetype/>
+                            <d:getcontenttype>video/mp4</d:getcontenttype>
+                            <d:getcontentlength>5096</d:getcontentlength>
+                        </d:prop>
+                    </d:propstat>
+                </d:response>
+            </d:multistatus>
+        """.trimIndent()
+
+        val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
+        assertEquals(1, items.size)
+        assertEquals("Snapchat-833812098.mp4", items[0].fileName)
     }
 
     // --- Safety limits ---

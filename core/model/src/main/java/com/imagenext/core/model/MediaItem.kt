@@ -13,6 +13,7 @@ package com.imagenext.core.model
  * @property lastModified Last modification timestamp (epoch millis).
  * @property captureTimestamp Best-effort capture timestamp (epoch millis), if available.
  * @property etag Server-provided ETag for change detection.
+ * @property fileId Nextcloud file identifier used for preview APIs, if known.
  * @property thumbnailPath Local filesystem path to the cached thumbnail, or null if not yet fetched.
  * @property folderPath The parent folder's remote path this item belongs to.
  */
@@ -24,6 +25,7 @@ data class MediaItem(
     val lastModified: Long,
     val captureTimestamp: Long? = null,
     val etag: String,
+    val fileId: Long? = null,
     val thumbnailPath: String? = null,
     val folderPath: String,
 ) {

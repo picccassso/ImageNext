@@ -57,7 +57,7 @@ fun FolderSelectionScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Select which folders to browse for photos. At least one is required to proceed.",
+                text = "Select top-level folders to browse for photos. Subfolders are included automatically.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             )

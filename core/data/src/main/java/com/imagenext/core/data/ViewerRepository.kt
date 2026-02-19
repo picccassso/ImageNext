@@ -42,6 +42,7 @@ open class ViewerRepository(
                 lastModified = it.lastModified,
                 captureTimestamp = it.captureTimestamp,
                 etag = it.etag,
+                fileId = it.fileId,
                 thumbnailPath = it.thumbnailPath,
                 folderPath = it.folderPath,
             )
@@ -59,6 +60,7 @@ open class ViewerRepository(
                 lastModified = it.lastModified,
                 captureTimestamp = it.captureTimestamp,
                 etag = it.etag,
+                fileId = it.fileId,
                 thumbnailPath = it.thumbnailPath,
                 folderPath = it.folderPath,
             )
@@ -81,6 +83,7 @@ open class ViewerRepository(
                 lastModified = it.lastModified,
                 captureTimestamp = it.captureTimestamp,
                 etag = it.etag,
+                fileId = it.fileId,
                 thumbnailPath = it.thumbnailPath,
                 folderPath = it.folderPath,
             )
@@ -88,16 +91,16 @@ open class ViewerRepository(
     }
 
     /** Returns an authenticated remote source for a media path, or null if no active session. */
-    open fun getRemoteMediaSource(remotePath: String): RemoteMediaSource? {
+    open fun getRemoteMediaSource(remotePath: String, fileId: Long? = null): RemoteMediaSource? {
         val session = sessionRepository?.getSession() ?: return null
         val cleanPath = remotePath.trimStart('/')
         val encodedPath = encodePathForWebDav(cleanPath)
         val fullResUrl = "${session.serverUrl}/remote.php/dav/files/${session.loginName}/$encodedPath"
-
-        val encodedRemotePath = URLEncoder.encode(remotePath, StandardCharsets.UTF_8.name())
-            .replace("+", "%20")
-        val previewUrl = "${session.serverUrl}/index.php/core/preview" +
-            "?file=$encodedRemotePath&x=$PREVIEW_SIZE&y=$PREVIEW_SIZE&a=1"
+        val previewUrl = buildPreviewUrl(
+            serverUrl = session.serverUrl,
+            remotePath = remotePath,
+            fileId = fileId,
+        )
 
         val authHeader = buildBasicAuthHeader(
             username = session.loginName,
@@ -128,7 +131,10 @@ open class ViewerRepository(
         return (start..end)
             .asSequence()
             .filter { it != centerIndex }
-            .mapNotNull { index -> getRemoteMediaSource(items[index].remotePath) }
+            .mapNotNull { index ->
+                val item = items[index]
+                getRemoteMediaSource(remotePath = item.remotePath, fileId = item.fileId)
+            }
             .toList()
     }
 
@@ -155,6 +161,21 @@ open class ViewerRepository(
     private fun buildBasicAuthHeader(username: String, password: String): String {
         val encoded = Base64.getEncoder().encodeToString("$username:$password".toByteArray())
         return "Basic $encoded"
+    }
+
+    private fun buildPreviewUrl(
+        serverUrl: String,
+        remotePath: String,
+        fileId: Long?,
+    ): String {
+        val query = if (fileId != null && fileId > 0L) {
+            "fileId=$fileId"
+        } else {
+            val encodedRemotePath = URLEncoder.encode(remotePath, StandardCharsets.UTF_8.name())
+                .replace("+", "%20")
+            "file=$encodedRemotePath"
+        }
+        return "$serverUrl/index.php/core/preview?$query&x=$PREVIEW_SIZE&y=$PREVIEW_SIZE&a=1&mode=cover&forceIcon=0"
     }
 
     private companion object {

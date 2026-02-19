@@ -25,6 +25,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import okhttp3.Credentials
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -35,6 +36,7 @@ import java.net.SocketTimeoutException
 import java.net.URLEncoder
 import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 
@@ -57,6 +59,7 @@ class ThumbnailWorker(
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
+        .dispatcher(Dispatcher().apply { maxRequestsPerHost = NETWORK_CONCURRENCY })
         .build()
 
     override suspend fun doWork(): Result {
@@ -96,6 +99,9 @@ class ThumbnailWorker(
         var localFrameSuccessCount = 0
         var localFrameSkippedCount = 0
         var cacheHitCount = 0
+        val previewFailureStatusCounts = mutableMapOf<Int, Int>()
+        var previewHttp400Count = 0
+        val disablePreviewEndpointForRun = AtomicBoolean(false)
 
         for (chunk in items.chunked(NETWORK_CONCURRENCY)) {
             if (isStopped) break
@@ -107,6 +113,7 @@ class ThumbnailWorker(
                             item = item,
                             session = session,
                             cacheDir = cacheDir,
+                            disablePreviewEndpointForRun = disablePreviewEndpointForRun,
                         )
                     }
                 }.awaitAll()
@@ -144,10 +151,46 @@ class ThumbnailWorker(
                     }
 
                     is ThumbnailFetchResult.Failed -> {
+                        result.previewStatusCode?.let { statusCode ->
+                            previewFailureStatusCounts[statusCode] =
+                                (previewFailureStatusCounts[statusCode] ?: 0) + 1
+                            if (statusCode == 400) {
+                                previewHttp400Count++
+                                if (
+                                    previewSuccessCount == 0 &&
+                                    previewHttp400Count >= PREVIEW_HTTP_400_DISABLE_THRESHOLD &&
+                                    disablePreviewEndpointForRun.compareAndSet(false, true)
+                                ) {
+                                    logPerf(
+                                        "thumbnail_preview_disabled_for_run " +
+                                            "reason=http400 " +
+                                            "count=$previewHttp400Count"
+                                    )
+                                }
+                            }
+                        }
                         failedUpdates += result.remotePath to result.errorCode
                     }
 
                     is ThumbnailFetchResult.Skipped -> {
+                        result.previewStatusCode?.let { statusCode ->
+                            previewFailureStatusCounts[statusCode] =
+                                (previewFailureStatusCounts[statusCode] ?: 0) + 1
+                            if (statusCode == 400) {
+                                previewHttp400Count++
+                                if (
+                                    previewSuccessCount == 0 &&
+                                    previewHttp400Count >= PREVIEW_HTTP_400_DISABLE_THRESHOLD &&
+                                    disablePreviewEndpointForRun.compareAndSet(false, true)
+                                ) {
+                                    logPerf(
+                                        "thumbnail_preview_disabled_for_run " +
+                                            "reason=http400 " +
+                                            "count=$previewHttp400Count"
+                                    )
+                                }
+                            }
+                        }
                         skippedUpdates += result.remotePath to result.reasonCode
                         if (result.reasonCode == REASON_VIDEO_FRAME_EXTRACT_UNSUPPORTED) {
                             localFrameSkippedCount++
@@ -163,6 +206,24 @@ class ThumbnailWorker(
                             ThumbnailSource.Preview -> previewSuccessCount++
                             ThumbnailSource.ImageTranscode -> imageTranscodeFallbackCount++
                             ThumbnailSource.LocalFrame -> localFrameSuccessCount++
+                        }
+                        result.previewStatusCode?.let { statusCode ->
+                            previewFailureStatusCounts[statusCode] =
+                                (previewFailureStatusCounts[statusCode] ?: 0) + 1
+                            if (statusCode == 400) {
+                                previewHttp400Count++
+                                if (
+                                    previewSuccessCount == 0 &&
+                                    previewHttp400Count >= PREVIEW_HTTP_400_DISABLE_THRESHOLD &&
+                                    disablePreviewEndpointForRun.compareAndSet(false, true)
+                                ) {
+                                    logPerf(
+                                        "thumbnail_preview_disabled_for_run " +
+                                            "reason=http400 " +
+                                            "count=$previewHttp400Count"
+                                    )
+                                }
+                            }
                         }
 
                         if (firstSuccessAtMs == null) {
@@ -253,6 +314,8 @@ class ThumbnailWorker(
                 "localFrameSuccess=$localFrameSuccessCount " +
                 "localFrameSkipped=$localFrameSkippedCount " +
                 "cacheHit=$cacheHitCount " +
+                "previewFailureStatus=${formatPreviewStatusCounts(previewFailureStatusCounts)} " +
+                "previewDisabled=${disablePreviewEndpointForRun.get()} " +
                 "dbFlushes=$dbFlushCount " +
                 "firstSuccessMs=${firstSuccessAtMs ?: -1L} " +
                 "durationMs=${elapsedSince(workerStartMs)}"
@@ -267,10 +330,15 @@ class ThumbnailWorker(
         )
     }
 
-    private fun buildPreviewUrl(serverUrl: String, remotePath: String): String {
-        val encodedPath = URLEncoder.encode(remotePath, StandardCharsets.UTF_8.name())
-            .replace("+", "%20")
-        return "${serverUrl}/index.php/core/preview?file=$encodedPath&x=$THUMBNAIL_SIZE&y=$THUMBNAIL_SIZE&a=1"
+    private fun buildPreviewUrl(serverUrl: String, remotePath: String, fileId: Long?): String {
+        val query = if (fileId != null && fileId > 0L) {
+            "fileId=$fileId"
+        } else {
+            val encodedPath = URLEncoder.encode(remotePath, StandardCharsets.UTF_8.name())
+                .replace("+", "%20")
+            "file=$encodedPath"
+        }
+        return "${serverUrl}/index.php/core/preview?$query&x=$THUMBNAIL_SIZE&y=$THUMBNAIL_SIZE&a=1&mode=cover&forceIcon=0"
     }
 
     private fun buildWebDavUrl(serverUrl: String, username: String, remotePath: String): String {
@@ -292,16 +360,10 @@ class ThumbnailWorker(
         url: String,
         username: String,
         password: String,
-        includeOcsHeader: Boolean = false,
     ): Request {
         return Request.Builder()
             .url(url)
             .header("Authorization", Credentials.basic(username, password))
-            .apply {
-                if (includeOcsHeader) {
-                    header("OCS-APIRequest", "true")
-                }
-            }
             .get()
             .build()
     }
@@ -354,6 +416,7 @@ class ThumbnailWorker(
         item: MediaItemEntity,
         session: AuthSession,
         cacheDir: File,
+        disablePreviewEndpointForRun: AtomicBoolean,
     ): ThumbnailFetchResult {
         return try {
             val mediaKind = MediaKind.from(
@@ -372,29 +435,38 @@ class ThumbnailWorker(
             }
 
             // Fetch from Nextcloud preview API.
-            val previewUrl = buildPreviewUrl(session.serverUrl, item.remotePath)
+            val previewUrl = buildPreviewUrl(
+                serverUrl = session.serverUrl,
+                remotePath = item.remotePath,
+                fileId = item.fileId,
+            )
             val previewRequest = buildAuthenticatedRequest(
                 url = previewUrl,
                 username = session.loginName,
                 password = session.appPassword,
-                includeOcsHeader = true,
             )
             var lastFailureCode: String? = null
+            var previewFailureStatusCode: Int? = null
             var shouldAttemptLocalVideoFrameFallback = false
-            val fetchedFromPreview = client.newCall(previewRequest).execute().use { response ->
-                if (response.isSuccessful && writeResponseToFile(response, thumbnailFile)) {
-                    true
-                } else {
-                    lastFailureCode = "preview_http_${response.code}"
-                    if (
-                        shouldAttemptLocalVideoFrameFallback(
-                            mediaKind = mediaKind,
-                            previewStatusCode = response.code,
-                        )
-                    ) {
-                        shouldAttemptLocalVideoFrameFallback = true
+            val fetchedFromPreview = if (disablePreviewEndpointForRun.get()) {
+                false
+            } else {
+                client.newCall(previewRequest).execute().use { response ->
+                    if (response.isSuccessful && writeResponseToFile(response, thumbnailFile)) {
+                        true
+                    } else {
+                        lastFailureCode = "preview_http_${response.code}"
+                        previewFailureStatusCode = response.code
+                        if (
+                            shouldAttemptLocalVideoFrameFallback(
+                                mediaKind = mediaKind,
+                                previewStatusCode = response.code,
+                            )
+                        ) {
+                            shouldAttemptLocalVideoFrameFallback = true
+                        }
+                        false
                     }
-                    false
                 }
             }
 
@@ -407,6 +479,13 @@ class ThumbnailWorker(
             }
 
             if (shouldAttemptLocalVideoFrameFallback) {
+                if (!shouldAttemptRemoteVideoFrameExtraction(item.size)) {
+                    return ThumbnailFetchResult.Skipped(
+                        remotePath = item.remotePath,
+                        reasonCode = REASON_VIDEO_FRAME_EXTRACT_TOO_LARGE,
+                        previewStatusCode = previewFailureStatusCode,
+                    )
+                }
                 when (
                     val fallback = attemptLocalVideoFrameThumbnail(
                         item = item,
@@ -419,6 +498,7 @@ class ThumbnailWorker(
                             remotePath = item.remotePath,
                             thumbnailPath = fallback.thumbnailPath,
                             source = ThumbnailSource.LocalFrame,
+                            previewStatusCode = previewFailureStatusCode,
                         )
                     }
                     is LocalVideoFrameResult.RetryUnreachable -> {
@@ -428,12 +508,14 @@ class ThumbnailWorker(
                         return ThumbnailFetchResult.Failed(
                             remotePath = item.remotePath,
                             errorCode = fallback.errorCode,
+                            previewStatusCode = previewFailureStatusCode,
                         )
                     }
                     is LocalVideoFrameResult.Skipped -> {
                         return ThumbnailFetchResult.Skipped(
                             remotePath = item.remotePath,
                             reasonCode = fallback.reasonCode,
+                            previewStatusCode = previewFailureStatusCode,
                         )
                     }
                 }
@@ -445,12 +527,14 @@ class ThumbnailWorker(
                     session = session,
                     destination = thumbnailFile,
                     failurePrefix = lastFailureCode ?: "preview_io",
+                    previewStatusCode = previewFailureStatusCode,
                 )
             }
 
             ThumbnailFetchResult.Failed(
                 remotePath = item.remotePath,
                 errorCode = lastFailureCode ?: ERROR_IO,
+                previewStatusCode = previewFailureStatusCode,
             )
         } catch (e: Exception) {
             val errorCode = classifyError(e)
@@ -481,7 +565,12 @@ class ThumbnailWorker(
                 "Authorization" to Credentials.basic(session.loginName, session.appPassword),
             )
             retriever.setDataSource(sourceUrl, headers)
-            val frame = retriever.getFrameAtTime(
+            val frame = retriever.getScaledFrameAtTime(
+                /* timeUs = */ 0L,
+                /* option = */ MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                /* dstWidth = */ THUMBNAIL_SIZE,
+                /* dstHeight = */ THUMBNAIL_SIZE,
+            ) ?: retriever.getFrameAtTime(
                 /* timeUs = */ 0L,
                 /* option = */ MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
             ) ?: return LocalVideoFrameResult.Skipped(REASON_VIDEO_FRAME_EXTRACT_UNSUPPORTED)
@@ -517,6 +606,7 @@ class ThumbnailWorker(
         session: AuthSession,
         destination: File,
         failurePrefix: String,
+        previewStatusCode: Int?,
     ): ThumbnailFetchResult {
         val webDavUrl = buildWebDavUrl(
             serverUrl = session.serverUrl,
@@ -529,50 +619,56 @@ class ThumbnailWorker(
             password = session.appPassword,
         )
 
+        val sourceFile = File(
+            destination.parentFile ?: applicationContext.cacheDir,
+            "${destination.nameWithoutExtension}_src.tmp",
+        )
+
         return try {
-            val decodeSampleSize = client.newCall(webDavRequest).execute().use { response ->
+            val downloaded = client.newCall(webDavRequest).execute().use { response ->
                 if (!response.isSuccessful) {
                     return ThumbnailFetchResult.Failed(
                         remotePath = item.remotePath,
                         errorCode = "${failurePrefix}_webdav_http_${response.code}",
+                        previewStatusCode = previewStatusCode,
                     )
                 }
-
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                response.body.byteStream().use { stream ->
-                    BitmapFactory.decodeStream(stream, null, bounds)
-                }
-                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                    return ThumbnailFetchResult.Failed(
-                        remotePath = item.remotePath,
-                        errorCode = "${failurePrefix}_webdav_decode_bounds",
-                    )
-                }
-                calculateInSampleSize(
-                    width = bounds.outWidth,
-                    height = bounds.outHeight,
-                    targetMaxDimension = THUMBNAIL_SIZE,
+                writeResponseToFile(response, sourceFile)
+            }
+            if (!downloaded) {
+                return ThumbnailFetchResult.Failed(
+                    remotePath = item.remotePath,
+                    errorCode = "${failurePrefix}_webdav_download",
+                    previewStatusCode = previewStatusCode,
                 )
             }
 
-            val bitmap = client.newCall(webDavRequest).execute().use { response ->
-                if (!response.isSuccessful) {
-                    return ThumbnailFetchResult.Failed(
-                        remotePath = item.remotePath,
-                        errorCode = "${failurePrefix}_webdav_http_${response.code}",
-                    )
-                }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(sourceFile.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                return ThumbnailFetchResult.Failed(
+                    remotePath = item.remotePath,
+                    errorCode = "${failurePrefix}_webdav_decode_bounds",
+                    previewStatusCode = previewStatusCode,
+                )
+            }
 
-                val decodeOptions = BitmapFactory.Options().apply {
+            val decodeSampleSize = calculateInSampleSize(
+                width = bounds.outWidth,
+                height = bounds.outHeight,
+                targetMaxDimension = THUMBNAIL_SIZE,
+            )
+
+            val bitmap = BitmapFactory.decodeFile(
+                sourceFile.absolutePath,
+                BitmapFactory.Options().apply {
                     inSampleSize = decodeSampleSize
                     inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-                response.body.byteStream().use { stream ->
-                    BitmapFactory.decodeStream(stream, null, decodeOptions)
-                }
-            } ?: return ThumbnailFetchResult.Failed(
+                },
+            ) ?: return ThumbnailFetchResult.Failed(
                 remotePath = item.remotePath,
                 errorCode = "${failurePrefix}_webdav_decode_bitmap",
+                previewStatusCode = previewStatusCode,
             )
 
             try {
@@ -583,11 +679,13 @@ class ThumbnailWorker(
                             remotePath = item.remotePath,
                             thumbnailPath = destination.absolutePath,
                             source = ThumbnailSource.ImageTranscode,
+                            previewStatusCode = previewStatusCode,
                         )
                     } else {
                         ThumbnailFetchResult.Failed(
                             remotePath = item.remotePath,
                             errorCode = "${failurePrefix}_webdav_write",
+                            previewStatusCode = previewStatusCode,
                         )
                     }
                 } finally {
@@ -606,7 +704,12 @@ class ThumbnailWorker(
                 ThumbnailFetchResult.Failed(
                     remotePath = item.remotePath,
                     errorCode = "${failurePrefix}_$errorCode",
+                    previewStatusCode = previewStatusCode,
                 )
+            }
+        } finally {
+            if (sourceFile.exists()) {
+                sourceFile.delete()
             }
         }
     }
@@ -662,16 +765,19 @@ class ThumbnailWorker(
             val remotePath: String,
             val thumbnailPath: String,
             val source: ThumbnailSource,
+            val previewStatusCode: Int? = null,
         ) : ThumbnailFetchResult
 
         data class Failed(
             val remotePath: String,
             val errorCode: String,
+            val previewStatusCode: Int? = null,
         ) : ThumbnailFetchResult
 
         data class Skipped(
             val remotePath: String,
             val reasonCode: String,
+            val previewStatusCode: Int? = null,
         ) : ThumbnailFetchResult
 
         data object RetryUnreachable : ThumbnailFetchResult
@@ -689,6 +795,13 @@ class ThumbnailWorker(
         Preview,
         ImageTranscode,
         LocalFrame,
+    }
+
+    private fun formatPreviewStatusCounts(counts: Map<Int, Int>): String {
+        if (counts.isEmpty()) return "none"
+        return counts.entries
+            .sortedBy { it.key }
+            .joinToString(separator = ",") { "${it.key}:${it.value}" }
     }
 
     private fun shouldFlushPendingUpdates(
@@ -768,7 +881,7 @@ class ThumbnailWorker(
         private const val DB_UPDATE_MAX_STALENESS_MS = 2000L
 
         /** Number of concurrent network fetches per loop to reduce total thumbnail latency. */
-        private const val NETWORK_CONCURRENCY = 4
+        private const val NETWORK_CONCURRENCY = 12
 
         /** Thumbnail preview size in pixels. */
         const val THUMBNAIL_SIZE = 256
@@ -782,6 +895,9 @@ class ThumbnailWorker(
         private const val ERROR_IO = "io"
         private const val ERROR_VIDEO_FRAME_EXTRACT_IO = "video_frame_extract_io"
         private const val REASON_VIDEO_FRAME_EXTRACT_UNSUPPORTED = "video_frame_extract_unsupported"
+        private const val REASON_VIDEO_FRAME_EXTRACT_TOO_LARGE = "video_frame_extract_too_large"
+        private const val MAX_REMOTE_VIDEO_FRAME_FALLBACK_BYTES = 120L * 1024L * 1024L
+        private const val PREVIEW_HTTP_400_DISABLE_THRESHOLD = 12
         private val UNSUPPORTED_VIDEO_PREVIEW_HTTP_CODES = setOf(400, 404, 415, 501)
 
         internal fun isUnsupportedVideoPreviewStatus(statusCode: Int): Boolean {
@@ -801,6 +917,10 @@ class ThumbnailWorker(
             previewStatusCode: Int,
         ): Boolean {
             return mediaKind == MediaKind.VIDEO && isUnsupportedVideoPreviewStatus(previewStatusCode)
+        }
+
+        internal fun shouldAttemptRemoteVideoFrameExtraction(fileSizeBytes: Long): Boolean {
+            return fileSizeBytes <= 0L || fileSizeBytes <= MAX_REMOTE_VIDEO_FRAME_FALLBACK_BYTES
         }
 
         internal fun classifyLocalVideoFrameFailure(error: Throwable): LocalVideoFrameFailure {
