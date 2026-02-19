@@ -20,7 +20,6 @@ An Android app for browsing and backing up your photos and videos to a Nextcloud
 
 - Auto sync still needs work and is being actively worked on.
 - Some animations are a bit rough and need smoothing out.
-- Thumbnail loading on first sync is slow, this is being worked on.
 - The general UI and overall look of the app is still being worked on.
 
 ## Requirements
