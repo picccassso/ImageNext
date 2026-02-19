@@ -1,6 +1,6 @@
 # ImageNext
 
-![ImageNext](ImageNext_icon.png)
+<img src="ImageNext_icon.png" width="120"/>
 
 An Android app for browsing and backing up your photos and videos to a Nextcloud server.
 
