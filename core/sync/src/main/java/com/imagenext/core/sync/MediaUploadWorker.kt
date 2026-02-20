@@ -86,20 +86,18 @@ class MediaUploadWorker(
         val webDavClient = WebDavClient()
 
         val now = System.currentTimeMillis()
-        val queue = withContext(Dispatchers.IO) {
+        withContext(Dispatchers.IO) {
             // Recover rows left in UPLOADING state after process death/FGS crashes.
             queueDao.requeueAll(
                 fromStatus = UploadStatus.UPLOADING.name,
                 status = UploadStatus.PENDING.name,
                 updatedAt = now,
             )
-            queueDao.getReadyByStatus(
-                status = UploadStatus.PENDING.name,
-                now = now,
-                limit = BATCH_LIMIT,
-            )
         }
-        if (queue.isEmpty()) {
+        val totalPendingAtStart = withContext(Dispatchers.IO) {
+            queueDao.getCountByStatus(UploadStatus.PENDING.name)
+        }
+        if (totalPendingAtStart <= 0) {
             return Result.success(
                 workDataOf(
                     KEY_REASON to "empty_queue",
@@ -123,106 +121,132 @@ class MediaUploadWorker(
         var deletedCount = 0
         var lastError: String? = null
         var changedRemoteData = false
+        var processedSinceStart = 0
 
-        for ((index, item) in queue.withIndex()) {
-            if (isStopped) break
+        while (!isStopped) {
+            val queue = withContext(Dispatchers.IO) {
+                queueDao.getReadyByStatus(
+                    status = UploadStatus.PENDING.name,
+                    now = System.currentTimeMillis(),
+                    limit = BATCH_LIMIT,
+                )
+            }
+            if (queue.isEmpty()) break
 
-            val attemptStart = System.currentTimeMillis()
-            withContext(Dispatchers.IO) {
-                queueDao.update(
-                    item.copy(
-                        status = UploadStatus.UPLOADING.name,
-                        lastAttemptAt = attemptStart,
-                        updatedAt = attemptStart,
+            for ((index, item) in queue.withIndex()) {
+                if (isStopped) break
+
+                val attemptStart = System.currentTimeMillis()
+                withContext(Dispatchers.IO) {
+                    queueDao.update(
+                        item.copy(
+                            status = UploadStatus.UPLOADING.name,
+                            lastAttemptAt = attemptStart,
+                            updatedAt = attemptStart,
+                        )
+                    )
+                }
+
+                val outcome = when (UploadOperation.valueOf(item.operation)) {
+                    UploadOperation.UPLOAD -> processUpload(
+                        item = item,
+                        webDavClient = webDavClient,
+                        serverUrl = session.serverUrl,
+                        loginName = session.loginName,
+                        appPassword = session.appPassword,
+                    )
+                    UploadOperation.DELETE -> processDelete(
+                        item = item,
+                        webDavClient = webDavClient,
+                        serverUrl = session.serverUrl,
+                        loginName = session.loginName,
+                        appPassword = session.appPassword,
+                    )
+                }
+
+                processedCount++
+                processedSinceStart++
+                when (outcome) {
+                    is UploadOutcome.Success -> {
+                        successCount++
+                        when (outcome.kind) {
+                            UploadSuccessKind.UPLOADED -> {
+                                uploadedCount++
+                                changedRemoteData = true
+                            }
+                            UploadSuccessKind.SKIPPED_EXISTING -> {
+                                skippedCount++
+                            }
+                            UploadSuccessKind.DELETED -> {
+                                deletedCount++
+                                changedRemoteData = true
+                            }
+                        }
+                        val updateTime = System.currentTimeMillis()
+                        withContext(Dispatchers.IO) {
+                            queueDao.update(
+                                item.copy(
+                                    status = UploadStatus.DONE.name,
+                                    lastError = null,
+                                    lastAttemptAt = updateTime,
+                                    nextAttemptAt = 0,
+                                    remotePath = outcome.remotePath,
+                                    updatedAt = updateTime,
+                                )
+                            )
+
+                            if (UploadOperation.valueOf(item.operation) == UploadOperation.UPLOAD) {
+                                registryDao.upsert(
+                                    UploadedMediaRegistryEntity(
+                                        stableKey = item.stableKey,
+                                        remotePath = outcome.remotePath,
+                                        lastKnownLocalUri = item.localUri,
+                                        bucketId = "unknown",
+                                        size = item.size ?: 0L,
+                                        dateTaken = item.dateTaken,
+                                        sha256 = null,
+                                        lastSeenAt = updateTime,
+                                        uploadedAt = updateTime,
+                                        deletedRemotelyAt = null,
+                                    )
+                                )
+                            } else {
+                                registryDao.markDeleted(
+                                    stableKey = item.stableKey,
+                                    deletedAt = updateTime,
+                                )
+                            }
+                        }
+                    }
+
+                    is UploadOutcome.Failure -> {
+                        failedCount++
+                        lastError = outcome.errorCode
+                        handleFailure(item = item, failure = outcome, queueDao = queueDao)
+                    }
+                }
+
+                val progressCurrent = processedSinceStart.coerceAtMost(totalPendingAtStart)
+                setProgress(
+                    workDataOf(
+                        KEY_PROGRESS_CURRENT to progressCurrent,
+                        KEY_PROGRESS_TOTAL to totalPendingAtStart,
+                    )
+                )
+                val remaining = (totalPendingAtStart - processedSinceStart).coerceAtLeast(0)
+                val message = if (totalPendingAtStart > queue.size || processedSinceStart > index + 1) {
+                    "Uploading · $remaining remaining"
+                } else {
+                    "Uploading · ${index + 1} of ${queue.size}"
+                }
+                setForeground(
+                    createForegroundInfo(
+                        message = message,
+                        progressCurrent = progressCurrent,
+                        progressMax = totalPendingAtStart,
                     )
                 )
             }
-
-            val outcome = when (UploadOperation.valueOf(item.operation)) {
-                UploadOperation.UPLOAD -> processUpload(
-                    item = item,
-                    webDavClient = webDavClient,
-                    serverUrl = session.serverUrl,
-                    loginName = session.loginName,
-                    appPassword = session.appPassword,
-                )
-                UploadOperation.DELETE -> processDelete(
-                    item = item,
-                    webDavClient = webDavClient,
-                    serverUrl = session.serverUrl,
-                    loginName = session.loginName,
-                    appPassword = session.appPassword,
-                )
-            }
-
-            processedCount++
-            when (outcome) {
-                is UploadOutcome.Success -> {
-                    successCount++
-                    when (outcome.kind) {
-                        UploadSuccessKind.UPLOADED -> {
-                            uploadedCount++
-                            changedRemoteData = true
-                        }
-                        UploadSuccessKind.SKIPPED_EXISTING -> {
-                            skippedCount++
-                        }
-                        UploadSuccessKind.DELETED -> {
-                            deletedCount++
-                            changedRemoteData = true
-                        }
-                    }
-                    val updateTime = System.currentTimeMillis()
-                    withContext(Dispatchers.IO) {
-                        queueDao.update(
-                            item.copy(
-                                status = UploadStatus.DONE.name,
-                                lastError = null,
-                                lastAttemptAt = updateTime,
-                                nextAttemptAt = 0,
-                                remotePath = outcome.remotePath,
-                                updatedAt = updateTime,
-                            )
-                        )
-
-                        if (UploadOperation.valueOf(item.operation) == UploadOperation.UPLOAD) {
-                            registryDao.upsert(
-                                UploadedMediaRegistryEntity(
-                                    stableKey = item.stableKey,
-                                    remotePath = outcome.remotePath,
-                                    lastKnownLocalUri = item.localUri,
-                                    bucketId = "unknown",
-                                    size = item.size ?: 0L,
-                                    dateTaken = item.dateTaken,
-                                    sha256 = null,
-                                    lastSeenAt = updateTime,
-                                    uploadedAt = updateTime,
-                                    deletedRemotelyAt = null,
-                                )
-                            )
-                        } else {
-                            registryDao.markDeleted(
-                                stableKey = item.stableKey,
-                                deletedAt = updateTime,
-                            )
-                        }
-                    }
-                }
-
-                is UploadOutcome.Failure -> {
-                    failedCount++
-                    lastError = outcome.errorCode
-                    handleFailure(item = item, failure = outcome, queueDao = queueDao)
-                }
-            }
-
-            setProgress(
-                workDataOf(
-                    KEY_PROGRESS_CURRENT to (index + 1),
-                    KEY_PROGRESS_TOTAL to queue.size,
-                )
-            )
-            setForeground(createForegroundInfo("Uploading backup items ${index + 1}/${queue.size}"))
         }
 
         withContext(Dispatchers.IO) {
@@ -230,6 +254,10 @@ class MediaUploadWorker(
                 status = UploadStatus.DONE.name,
                 cutoff = System.currentTimeMillis() - DONE_RETENTION_MS,
             )
+        }
+
+        if (!isStopped && (uploadedCount > 0 || skippedCount > 0 || failedCount > 0)) {
+            postCompletionNotification(uploadedCount, skippedCount, failedCount)
         }
 
         if (changedRemoteData && !isStopped) {
@@ -405,16 +433,50 @@ class MediaUploadWorker(
         }
     }
 
-    private fun createForegroundInfo(message: String): ForegroundInfo {
+    private fun postCompletionNotification(uploadedCount: Int, skippedCount: Int, failedCount: Int) {
         ensureNotificationChannel(applicationContext)
+        val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE)
+            as? android.app.NotificationManager ?: return
+        val allFailed = failedCount > 0 && uploadedCount == 0 && skippedCount == 0
+        val title = if (allFailed) "Backup · $failedCount failed" else "Backup complete"
+        val parts = buildList {
+            if (uploadedCount > 0) add("$uploadedCount uploaded")
+            if (skippedCount > 0) add("$skippedCount already backed up")
+            if (failedCount > 0) add("$failedCount failed")
+        }
         val notification = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(
+                if (allFailed) android.R.drawable.stat_notify_error
+                else android.R.drawable.stat_sys_upload_done,
+            )
+            .setContentTitle(title)
+            .setContentText(parts.joinToString(" · "))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setProgress(0, 0, false)
+            .build()
+        manager.notify(NOTIFICATION_ID_SUMMARY, notification)
+    }
+
+    private fun createForegroundInfo(
+        message: String,
+        progressCurrent: Int = 0,
+        progressMax: Int = 0,
+    ): ForegroundInfo {
+        ensureNotificationChannel(applicationContext)
+        val builder = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setContentTitle("ImageNext backup")
             .setContentText(message)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .build()
+        if (progressMax > 0) {
+            builder.setProgress(progressMax, progressCurrent, false)
+        } else {
+            builder.setProgress(0, 0, true)
+        }
+        val notification = builder.build()
 
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ForegroundInfo(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -456,6 +518,7 @@ class MediaUploadWorker(
         private const val NOTIFICATION_CHANNEL_ID = "imagenext_backup_uploads"
         private const val NOTIFICATION_CHANNEL_NAME = "ImageNext Backup Uploads"
         private const val NOTIFICATION_ID = 4041
+        private const val NOTIFICATION_ID_SUMMARY = 4042
 
         fun enqueueDebounced(
             context: Context,

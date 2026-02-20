@@ -61,7 +61,7 @@ feature/      — UI features (onboarding, folders, photos, viewer, albums, sett
 
 ## Recent Changes
 
-**2026-02-19**
+**2026-02-19 / 2026-02-20**
 
 - Thumbnail loading is now fast — previews are fetched using Nextcloud file IDs instead of paths, which fixed repeated HTTP 400 failures that were forcing slow local fallback processing. 100 thumbnails now load in ~4.7s instead of ~50s.
 - macOS `._*` sidecar files are filtered out and no longer appear in the media timeline.
@@ -69,6 +69,12 @@ feature/      — UI features (onboarding, folders, photos, viewer, albums, sett
 - Timeline sort order is now stable when multiple items share the same timestamp, so the grid no longer jumps around after a sync.
 - Backing out of the fullscreen viewer now returns you to the same position in the Photos grid.
 - Added custom app launcher icon.
+- Backup status in Settings redesigned — color-coded status dot, timestamp of last run, and stat pills (added/skipped/failed) replacing the old dense single-line strings.
+- Backup upload notification now shows total remaining items across the full queue, not just the current batch. A completion summary notification ("Backup complete · X uploaded") is posted when each batch finishes.
+- Backup worker now drains all pending batches in a single run instead of stopping after the first 16 items.
+- Backup UI no longer shows "Running" just because items are queued — requires an active upload worker.
+- Deleting media on Nextcloud now removes it from ImageNext after the next sync — timeline, albums, and thumbnail cache are all cleaned up.
+- Ghost black tiles from previously deleted remote files are now detected and removed via a HEAD probe pass during sync.
 
 ## License
 

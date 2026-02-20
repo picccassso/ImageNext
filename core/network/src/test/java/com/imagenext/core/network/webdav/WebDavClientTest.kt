@@ -5,9 +5,10 @@ import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 
@@ -362,6 +363,161 @@ class WebDavClientTest {
         val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
         assertEquals(1, items.size)
         assertEquals("Snapchat-833812098.mp4", items[0].fileName)
+    }
+
+    @Test
+    fun `listMediaFilesRecursively returns media items and scanned folders`() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(207)
+                .setBody(
+                    """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <d:multistatus xmlns:d="DAV:">
+                        <d:response>
+                            <d:href>/remote.php/dav/files/testuser/Photos/</d:href>
+                            <d:propstat>
+                                <d:prop>
+                                    <d:resourcetype><d:collection/></d:resourcetype>
+                                    <d:displayname>Photos</d:displayname>
+                                </d:prop>
+                            </d:propstat>
+                        </d:response>
+                        <d:response>
+                            <d:href>/remote.php/dav/files/testuser/Photos/root.jpg</d:href>
+                            <d:propstat>
+                                <d:prop>
+                                    <d:resourcetype/>
+                                    <d:getcontenttype>image/jpeg</d:getcontenttype>
+                                    <d:getcontentlength>1000</d:getcontentlength>
+                                </d:prop>
+                            </d:propstat>
+                        </d:response>
+                        <d:response>
+                            <d:href>/remote.php/dav/files/testuser/Photos/Trips/</d:href>
+                            <d:propstat>
+                                <d:prop>
+                                    <d:resourcetype><d:collection/></d:resourcetype>
+                                    <d:displayname>Trips</d:displayname>
+                                </d:prop>
+                            </d:propstat>
+                        </d:response>
+                    </d:multistatus>
+                    """.trimIndent()
+                )
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(207)
+                .setBody(
+                    """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <d:multistatus xmlns:d="DAV:">
+                        <d:response>
+                            <d:href>/remote.php/dav/files/testuser/Photos/Trips/</d:href>
+                            <d:propstat>
+                                <d:prop>
+                                    <d:resourcetype><d:collection/></d:resourcetype>
+                                    <d:displayname>Trips</d:displayname>
+                                </d:prop>
+                            </d:propstat>
+                        </d:response>
+                        <d:response>
+                            <d:href>/remote.php/dav/files/testuser/Photos/Trips/child.jpg</d:href>
+                            <d:propstat>
+                                <d:prop>
+                                    <d:resourcetype/>
+                                    <d:getcontenttype>image/jpeg</d:getcontenttype>
+                                    <d:getcontentlength>2000</d:getcontentlength>
+                                </d:prop>
+                            </d:propstat>
+                        </d:response>
+                    </d:multistatus>
+                    """.trimIndent()
+                )
+        )
+        server.start()
+        try {
+            val result = WebDavClient(OkHttpClient()).listMediaFilesRecursively(
+                serverUrl = server.url("/").toString().trimEnd('/'),
+                loginName = "testuser",
+                appPassword = "app-pass",
+                folderPath = "/Photos/",
+                maxDepth = 2,
+            )
+
+            assertTrue(result is WebDavClient.WebDavResult.Success)
+            val data = (result as WebDavClient.WebDavResult.Success).data
+            assertEquals(2, data.mediaItems.size)
+            assertTrue(data.scannedFolders.contains("/Photos"))
+            assertTrue(data.scannedFolders.contains("/Photos/Trips"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `listMediaFilesRecursively excludes child folder when child request fails`() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(207)
+                .setBody(
+                    """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <d:multistatus xmlns:d="DAV:">
+                        <d:response>
+                            <d:href>/remote.php/dav/files/testuser/Photos/</d:href>
+                            <d:propstat>
+                                <d:prop>
+                                    <d:resourcetype><d:collection/></d:resourcetype>
+                                    <d:displayname>Photos</d:displayname>
+                                </d:prop>
+                            </d:propstat>
+                        </d:response>
+                        <d:response>
+                            <d:href>/remote.php/dav/files/testuser/Photos/root.jpg</d:href>
+                            <d:propstat>
+                                <d:prop>
+                                    <d:resourcetype/>
+                                    <d:getcontenttype>image/jpeg</d:getcontenttype>
+                                    <d:getcontentlength>1000</d:getcontentlength>
+                                </d:prop>
+                            </d:propstat>
+                        </d:response>
+                        <d:response>
+                            <d:href>/remote.php/dav/files/testuser/Photos/Trips/</d:href>
+                            <d:propstat>
+                                <d:prop>
+                                    <d:resourcetype><d:collection/></d:resourcetype>
+                                    <d:displayname>Trips</d:displayname>
+                                </d:prop>
+                            </d:propstat>
+                        </d:response>
+                    </d:multistatus>
+                    """.trimIndent()
+                )
+        )
+        server.enqueue(MockResponse().setResponseCode(500))
+        server.start()
+        try {
+            val result = WebDavClient(OkHttpClient()).listMediaFilesRecursively(
+                serverUrl = server.url("/").toString().trimEnd('/'),
+                loginName = "testuser",
+                appPassword = "app-pass",
+                folderPath = "/Photos/",
+                maxDepth = 2,
+            )
+
+            assertTrue(result is WebDavClient.WebDavResult.Success)
+            val data = (result as WebDavClient.WebDavResult.Success).data
+            assertEquals(1, data.mediaItems.size)
+            assertTrue(data.scannedFolders.contains("/Photos"))
+            assertFalse(data.scannedFolders.contains("/Photos/Trips"))
+        } finally {
+            server.shutdown()
+        }
     }
 
     // --- Safety limits ---

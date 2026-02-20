@@ -41,6 +41,12 @@ class WebDavClient(
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 ) {
+    /** Recursive media scan payload with folder coverage metadata. */
+    data class RecursiveMediaScan(
+        val mediaItems: List<MediaItem>,
+        val scannedFolders: Set<String>,
+    )
+
 
     /** Remote metadata returned by lightweight HEAD checks. */
     data class RemoteFileInfo(
@@ -167,11 +173,12 @@ class WebDavClient(
         appPassword: String,
         folderPath: String,
         maxDepth: Int = MAX_MEDIA_SCAN_DEPTH,
-    ): WebDavResult<List<MediaItem>> {
+    ): WebDavResult<RecursiveMediaScan> {
         return try {
             val queue = ArrayDeque<Pair<String, Int>>()
             val visitedFolders = mutableSetOf<String>()
             val mediaItems = mutableListOf<MediaItem>()
+            val scannedFolders = mutableSetOf<String>()
             val scanDeadlineMs = System.currentTimeMillis() + MAX_MEDIA_SCAN_DURATION_MS
 
             queue.add(folderPath to 0)
@@ -206,12 +213,14 @@ class WebDavClient(
                             continue@scanLoop
                         }
 
-                        mediaItems += parseMediaItems(
+                        val parsedItems = parseMediaItems(
                             xml = body,
                             folderPath = currentFolder,
                             serverUrl = serverUrl,
                             loginName = loginName,
                         )
+                        mediaItems += parsedItems
+                        scannedFolders += normalizeRemotePath(currentFolder)
 
                         if (depth < maxDepth) {
                             val childFolders = parseFolders(
@@ -237,10 +246,18 @@ class WebDavClient(
                 } catch (e: IOException) {
                     if (depth == 0) return exceptionError("Failed to list media files: ${e.message}", e)
                     continue@scanLoop
+                } catch (e: Exception) {
+                    if (depth == 0) return exceptionError("Failed to parse media response: ${e.message}", e)
+                    continue@scanLoop
                 }
             }
 
-            WebDavResult.Success(mediaItems.distinctBy { it.remotePath })
+            WebDavResult.Success(
+                RecursiveMediaScan(
+                    mediaItems = mediaItems.distinctBy { it.remotePath },
+                    scannedFolders = scannedFolders,
+                )
+            )
         } catch (e: UnknownHostException) {
             exceptionError("Server not found.", e)
         } catch (e: SocketTimeoutException) {
@@ -249,6 +266,8 @@ class WebDavClient(
             exceptionError("Secure connection failed.", e)
         } catch (e: IOException) {
             exceptionError("Failed to list media files: ${e.message}", e)
+        } catch (e: Exception) {
+            exceptionError("Failed to parse media responses: ${e.message}", e)
         }
     }
 
@@ -429,6 +448,13 @@ class WebDavClient(
         if (folderName.isBlank()) return false
         if (folderName.startsWith(".")) return false
         return folderName !in SKIPPED_MEDIA_SCAN_FOLDERS
+    }
+
+    private fun normalizeRemotePath(path: String): String {
+        val trimmed = path.trim()
+        if (trimmed.isBlank()) return "/"
+        val withPrefix = if (trimmed.startsWith('/')) trimmed else "/$trimmed"
+        return withPrefix.replace(Regex("/+"), "/").trimEnd('/').ifBlank { "/" }
     }
 
     private fun httpError(message: String, statusCode: Int): WebDavResult.Error {

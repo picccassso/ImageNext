@@ -8,12 +8,15 @@ import android.os.CancellationSignal
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -25,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -44,6 +48,8 @@ import com.imagenext.core.model.BackupRunState
 import com.imagenext.core.model.SyncState
 import com.imagenext.core.security.LockMethod
 import com.imagenext.designsystem.ImageNextSurface
+import com.imagenext.designsystem.Motion
+import com.imagenext.designsystem.Spacing
 
 @Composable
 fun SettingsScreen(
@@ -1087,104 +1093,165 @@ private fun connectionStatusIconTint(connectionStatus: ConnectionStatus): Color 
 
 @Composable
 private fun BackupStatusDisplay(state: com.imagenext.core.model.BackupSyncState) {
-    val green = Color(0xFF4CAF50)
-    val gray = MaterialTheme.colorScheme.onSurfaceVariant
-    val red = Color(0xFFEF5350)
+    val colorRunning = MaterialTheme.colorScheme.onSurfaceVariant
+    val colorDone    = MaterialTheme.colorScheme.primary
+    val colorFailed  = MaterialTheme.colorScheme.error
+    val colorMuted   = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
 
-    val (statusColor, statusLabel) = when (state.runState) {
-        BackupRunState.COMPLETED -> green to "Completed"
-        BackupRunState.RUNNING   -> gray  to "Running…"
-        BackupRunState.FAILED    -> red   to "Failed"
-        BackupRunState.IDLE      -> gray  to "Idle"
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        // Row 1: status dot + label, with live pending/failed counts if relevant
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(statusColor)
-            )
-            Text(
-                text = statusLabel,
-                style = MaterialTheme.typography.bodySmall,
-                color = statusColor,
-                fontWeight = FontWeight.SemiBold,
-            )
-            if (state.pendingCount > 0) {
-                Text(
-                    text = "${state.pendingCount} pending",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = gray,
-                )
-            }
-            if (state.failedCount > 0) {
-                Text(
-                    text = "${state.failedCount} failed",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = red,
-                )
-            }
-        }
-
-        // Last run block — only shown after at least one run
-        if (state.hasLastRun) {
-            val (lastColor, lastLabel) = when (state.lastRunResult) {
-                BackupRunState.COMPLETED -> green to "Last run completed"
-                BackupRunState.FAILED    -> red   to "Last run failed"
-                BackupRunState.RUNNING   -> gray  to "Last run interrupted"
-                BackupRunState.IDLE      -> gray  to "Last run ended"
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // Row 2: last run result label
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(androidx.compose.foundation.shape.CircleShape)
-                        .background(lastColor)
-                )
-                Text(
-                    text = lastLabel,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = lastColor,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-
-            // Row 3: timestamp — dot-width spacer keeps it flush with text above
-            state.lastRunFinishedAt?.let { ts ->
-                val formatted = remember(ts) {
-                    java.text.SimpleDateFormat("MMM d, yyyy  h:mm a", java.util.Locale.getDefault())
-                        .format(java.util.Date(ts))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Spacer(modifier = Modifier.size(7.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+        when (state.runState) {
+            BackupRunState.IDLE -> {
+                if (!state.hasLastRun) {
                     Text(
-                        text = formatted,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = gray,
+                        text = "Ready",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorMuted,
                     )
                 }
             }
+            BackupRunState.RUNNING -> {
+                BackupRunningRow(
+                    pendingCount = state.pendingCount,
+                    progressCurrent = state.progressCurrent,
+                    progressTotal = state.progressTotal,
+                    colorRunning = colorRunning,
+                )
+            }
+            BackupRunState.COMPLETED -> {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(colorDone)
+                    )
+                    Text(
+                        text = "Up to date",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorDone,
+                    )
+                }
+            }
+            BackupRunState.FAILED -> {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(colorFailed)
+                    )
+                    Text(
+                        text = if (state.failedCount > 0) "${state.failedCount} failed" else "Failed",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorFailed,
+                    )
+                }
+            }
+        }
 
-            // Row 4: stat pills — dot-width spacer keeps them flush with text above
+        if (state.hasLastRun && state.runState != BackupRunState.RUNNING) {
+            BackupLastRunBlock(
+                state = state,
+                colorDone = colorDone,
+                colorFailed = colorFailed,
+                colorMuted = colorMuted,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BackupRunningRow(
+    pendingCount: Int,
+    progressCurrent: Int,
+    progressTotal: Int,
+    colorRunning: Color,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+        Text(
+            text = if (pendingCount > 0) "$pendingCount remaining" else "Uploading\u2026",
+            style = MaterialTheme.typography.bodySmall,
+            color = colorRunning,
+        )
+        val hasDeterminate = progressTotal > 0
+        if (hasDeterminate) {
+            val fraction by animateFloatAsState(
+                targetValue = (progressCurrent.toFloat() / progressTotal.toFloat()).coerceIn(0f, 1f),
+                animationSpec = tween(durationMillis = Motion.DURATION_MEDIUM_MS),
+                label = "backup_progress",
+            )
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(MaterialTheme.shapes.small),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+            )
+        } else {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(MaterialTheme.shapes.small),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun BackupLastRunBlock(
+    state: com.imagenext.core.model.BackupSyncState,
+    colorDone: Color,
+    colorFailed: Color,
+    colorMuted: Color,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+        state.lastRunFinishedAt?.let { ts ->
+            val label = remember(ts) {
+                val age = System.currentTimeMillis() - ts
+                when {
+                    age < 60_000L         -> "Just now"
+                    age < 3_600_000L      -> "${age / 60_000L}m ago"
+                    age < 86_400_000L     -> "${age / 3_600_000L}h ago"
+                    age < 7 * 86_400_000L -> "${age / 86_400_000L}d ago"
+                    else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
+                        .format(java.util.Date(ts))
+                }
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = colorMuted,
+            )
+        }
+        val hasStats = state.lastRunUploadedCount > 0 || state.lastRunSkippedCount > 0 ||
+            state.lastRunDeletedCount > 0 || state.lastRunFailedCount > 0
+        if (hasStats) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Spacer(modifier = Modifier.size(7.dp))
-                BackupStatPill(label = "added",   value = state.lastRunUploadedCount, valueColor = green, gray = gray)
-                BackupStatPill(label = "skipped", value = state.lastRunSkippedCount,  valueColor = gray,  gray = gray)
+                if (state.lastRunUploadedCount > 0) {
+                    BackupStatPill(state.lastRunUploadedCount, "added", colorDone)
+                }
+                if (state.lastRunSkippedCount > 0) {
+                    BackupStatPill(state.lastRunSkippedCount, "skipped", colorMuted)
+                }
                 if (state.lastRunDeletedCount > 0) {
-                    BackupStatPill(label = "deleted", value = state.lastRunDeletedCount, valueColor = gray, gray = gray)
+                    BackupStatPill(state.lastRunDeletedCount, "deleted", colorMuted)
                 }
                 if (state.lastRunFailedCount > 0) {
-                    BackupStatPill(label = "failed", value = state.lastRunFailedCount, valueColor = red, gray = gray)
+                    BackupStatPill(state.lastRunFailedCount, "failed", colorFailed)
                 }
             }
         }
@@ -1192,25 +1259,24 @@ private fun BackupStatusDisplay(state: com.imagenext.core.model.BackupSyncState)
 }
 
 @Composable
-private fun BackupStatPill(label: String, value: Int, valueColor: Color, gray: Color) {
+private fun BackupStatPill(value: Int, label: String, valueColor: Color) {
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = Spacing.xs, vertical = Spacing.xxxs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xxxs),
     ) {
         Text(
             text = value.toString(),
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
             color = valueColor,
-            fontWeight = FontWeight.Bold,
         )
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = gray,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

@@ -18,6 +18,12 @@ data class ReadyThumbnailReference(
     val thumbnailPath: String,
 )
 
+/** Lightweight projection used while pruning stale media rows. */
+data class MediaPruneRef(
+    val remotePath: String,
+    val thumbnailPath: String?,
+)
+
 /**
  * Data access object for media items.
  *
@@ -47,9 +53,47 @@ interface MediaDao {
     @Query("DELETE FROM media_items WHERE folderPath = :folderPath")
     suspend fun deleteByFolder(folderPath: String)
 
+    /** Deletes a specific set of media rows by remote path. */
+    @Query("DELETE FROM media_items WHERE remotePath IN (:remotePaths)")
+    suspend fun deleteByRemotePaths(remotePaths: List<String>)
+
     /** Deletes macOS AppleDouble sidecar records (._*) for a specific folder. */
     @Query("DELETE FROM media_items WHERE folderPath = :folderPath AND fileName LIKE '._%'")
     suspend fun deleteAppleDoubleByFolder(folderPath: String)
+
+    /** Returns media refs for the provided folder path aliases. */
+    @Query(
+        "SELECT remotePath, thumbnailPath FROM media_items " +
+            "WHERE folderPath IN (:folderPaths)"
+    )
+    suspend fun getMediaRefsByFolderPaths(folderPaths: List<String>): List<MediaPruneRef>
+
+    /** Returns media refs under an exact remote root path or its nested descendants. */
+    @Query(
+        "SELECT remotePath, thumbnailPath FROM media_items " +
+            "WHERE remotePath = :rootPath OR remotePath LIKE :rootPrefixLike"
+    )
+    suspend fun getMediaRefsUnderRemotePath(rootPath: String, rootPrefixLike: String): List<MediaPruneRef>
+
+    /** Likely ghost rows: thumbnail generation failed/skipped and may represent remote deletions. */
+    @Query(
+        "SELECT remotePath, thumbnailPath FROM media_items " +
+            "WHERE thumbnailStatus IN ('$THUMBNAIL_STATUS_FAILED', '$THUMBNAIL_STATUS_SKIPPED') " +
+            "ORDER BY timelineSortKey DESC, remotePath DESC " +
+            "LIMIT :limit"
+    )
+    suspend fun getMissingRemoteProbeCandidates(limit: Int): List<MediaPruneRef>
+
+    /** READY rows to probe only when the on-disk thumbnail file is missing locally. */
+    @Query(
+        "SELECT remotePath, thumbnailPath FROM media_items " +
+            "WHERE thumbnailStatus = '$THUMBNAIL_STATUS_READY' " +
+            "AND thumbnailPath IS NOT NULL " +
+            "AND thumbnailPath != '' " +
+            "ORDER BY timelineSortKey DESC, remotePath DESC " +
+            "LIMIT :limit"
+    )
+    suspend fun getReadyThumbnailProbeCandidates(limit: Int): List<MediaPruneRef>
 
     /** Returns the total count of media items. */
     @Query("SELECT COUNT(*) FROM media_items")

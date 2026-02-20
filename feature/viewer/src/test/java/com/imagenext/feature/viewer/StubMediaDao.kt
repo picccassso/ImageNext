@@ -1,6 +1,7 @@
 package com.imagenext.feature.viewer
 
 import androidx.paging.PagingSource
+import com.imagenext.core.database.dao.MediaPruneRef
 import com.imagenext.core.database.dao.MediaDao
 import com.imagenext.core.database.dao.ReadyThumbnailReference
 import com.imagenext.core.database.entity.MediaItemEntity
@@ -16,6 +17,12 @@ class StubMediaDao : MediaDao {
     override fun getMediaByFolder(folderPath: String): Flow<List<MediaItemEntity>> = emptyFlow()
     override suspend fun upsertAll(items: List<MediaItemEntity>) {}
     override suspend fun deleteByFolder(folderPath: String) {}
+    override suspend fun deleteByRemotePaths(remotePaths: List<String>) {}
+    override suspend fun deleteAppleDoubleByFolder(folderPath: String) {}
+    override suspend fun getMediaRefsByFolderPaths(folderPaths: List<String>): List<MediaPruneRef> = emptyList()
+    override suspend fun getMediaRefsUnderRemotePath(rootPath: String, rootPrefixLike: String): List<MediaPruneRef> = emptyList()
+    override suspend fun getMissingRemoteProbeCandidates(limit: Int): List<MediaPruneRef> = emptyList()
+    override suspend fun getReadyThumbnailProbeCandidates(limit: Int): List<MediaPruneRef> = emptyList()
     override suspend fun getCount(): Int = 0
     override suspend fun getItemsNeedingThumbnail(limit: Int, maxRetryCount: Int): List<MediaItemEntity> = emptyList()
     override suspend fun markThumbnailReady(remotePath: String, thumbnailPath: String) {}

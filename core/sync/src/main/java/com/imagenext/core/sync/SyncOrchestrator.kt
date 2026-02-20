@@ -164,7 +164,8 @@ class SyncOrchestrator(
             workManager.getWorkInfosForUniqueWorkFlow(MediaUploadWorker.WORK_NAME),
             uploadQueueDao.observeCountByStatus(UploadStatus.PENDING.name),
             uploadQueueDao.observeCountByStatus(UploadStatus.FAILED.name),
-        ) { uploadInfos, pendingCount, failedCount ->
+            uploadQueueDao.observeCountByStatus(UploadStatus.UPLOADING.name),
+        ) { uploadInfos, pendingCount, failedCount, uploadingCount ->
             val latestUploadInfo = latestInfoForWorker(
                 infos = uploadInfos,
                 workerTag = MediaUploadWorker::class.java.name,
@@ -178,6 +179,7 @@ class SyncOrchestrator(
                 latestReportableTerminalInfo = latestReportableTerminalInfo,
                 pendingCount = pendingCount,
                 failedCount = failedCount,
+                uploadingCount = uploadingCount,
             )
         }
             .distinctUntilChanged()
@@ -563,18 +565,27 @@ class SyncOrchestrator(
         latestReportableTerminalInfo: WorkInfo?,
         pendingCount: Int,
         failedCount: Int,
+        uploadingCount: Int,
     ): BackupSyncState {
         val uploadState = latestUploadInfo?.state
-        val runState = when {
+        val hasActiveUploadWork =
             uploadState == WorkInfo.State.RUNNING ||
                 uploadState == WorkInfo.State.ENQUEUED ||
-                uploadState == WorkInfo.State.BLOCKED -> BackupRunState.RUNNING
+                uploadState == WorkInfo.State.BLOCKED ||
+                uploadingCount > 0
+        val runState = when {
+            hasActiveUploadWork -> BackupRunState.RUNNING
             uploadState == WorkInfo.State.FAILED -> BackupRunState.FAILED
             uploadState == WorkInfo.State.SUCCEEDED && pendingCount == 0 && failedCount == 0 -> BackupRunState.COMPLETED
             failedCount > 0 -> BackupRunState.FAILED
-            pendingCount > 0 -> BackupRunState.RUNNING
+            pendingCount > 0 -> BackupRunState.IDLE
             else -> BackupRunState.IDLE
         }
+
+        val progressData = latestUploadInfo?.progress
+        val progressCurrent = progressData?.getInt(MediaUploadWorker.KEY_PROGRESS_CURRENT, 0) ?: 0
+        val progressTotal = progressData?.getInt(MediaUploadWorker.KEY_PROGRESS_TOTAL, 0) ?: 0
+        val totalQueueCount = pendingCount + uploadingCount + failedCount
 
         val terminalOutput = latestReportableTerminalInfo?.outputData
         val lastRunFailedCount = terminalOutput?.getInt(MediaUploadWorker.KEY_FAILED_COUNT, 0) ?: 0
@@ -591,6 +602,10 @@ class SyncOrchestrator(
             runState = runState,
             pendingCount = pendingCount,
             failedCount = failedCount,
+            uploadingCount = uploadingCount,
+            totalQueueCount = totalQueueCount,
+            progressCurrent = progressCurrent,
+            progressTotal = progressTotal,
             lastError = lastError,
             hasLastRun = latestReportableTerminalInfo != null,
             lastRunResult = lastRunResult,
