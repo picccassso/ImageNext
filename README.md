@@ -61,6 +61,16 @@ feature/      — UI features (onboarding, folders, photos, viewer, albums, sett
 
 ## Recent Changes
 
+**2026-02-20**
+
+- Videos now auto-loop and the play button correctly restarts after reaching the end.
+- Swipe-up gesture for file details is less sensitive to horizontal movement; added a chevron affordance button.
+- Photos tab shows an offline banner instead of spinning forever when the device or server is unreachable.
+- EXIF capture dates are now extracted during thumbnail sync, so photos display the real capture date instead of the server modification date.
+- Viewer top bar shows a Google Photos-style centered date/time instead of the filename.
+- Backup settings cleaned up — config options are hidden when backup is off and collapsed by default when on.
+- Fixed a sync regression where the Photos timeline stopped updating after the offline-detection changes.
+
 **2026-02-19 / 2026-02-20**
 
 - Thumbnail loading is now fast — previews are fetched using Nextcloud file IDs instead of paths, which fixed repeated HTTP 400 failures that were forcing slow local fallback processing. 100 thumbnails now load in ~4.7s instead of ~50s.

@@ -239,6 +239,29 @@ class WebDavClientTest {
     }
 
     @Test
+    fun `parseMediaItems returns null captureTimestamp for non-date filenames`() {
+        val xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <d:multistatus xmlns:d="DAV:">
+                <d:response>
+                    <d:href>/remote.php/dav/files/testuser/Photos/Gemini_Generated_Image_kjb3amkjb3amkjb3.png</d:href>
+                    <d:propstat>
+                        <d:prop>
+                            <d:resourcetype/>
+                            <d:getcontenttype>image/png</d:getcontenttype>
+                            <d:getcontentlength>5900000</d:getcontentlength>
+                        </d:prop>
+                    </d:propstat>
+                </d:response>
+            </d:multistatus>
+        """.trimIndent()
+
+        val items = client.parseMediaItems(xml, "/Photos/", "https://cloud.example.com", "testuser")
+        assertEquals(1, items.size)
+        assertNull(items[0].captureTimestamp)
+    }
+
+    @Test
     fun `parseMediaItems keeps jpg when content type is generic`() {
         val xml = """
             <?xml version="1.0" encoding="UTF-8"?>

@@ -365,7 +365,11 @@ class SettingsViewModel(
                     val session = sessionRepository.getSession()
                     when {
                         session == null -> ConnectionStatus.NOT_CONNECTED
-                        authApi.checkServerReachability(session.serverUrl) is NextcloudAuthApi.AuthResult.Success ->
+                        authApi.validateCredentials(
+                            serverUrl = session.serverUrl,
+                            loginName = session.loginName,
+                            appPassword = session.appPassword,
+                        ) is NextcloudAuthApi.AuthResult.Success ->
                             ConnectionStatus.CONNECTED
 
                         else -> ConnectionStatus.NOT_CONNECTED

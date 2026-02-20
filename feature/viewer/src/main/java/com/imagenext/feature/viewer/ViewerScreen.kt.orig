@@ -51,7 +51,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -317,34 +316,15 @@ private fun ViewerContent(
             enter = fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
             exit = fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
         ) {
-            CenterAlignedTopAppBar(
+            TopAppBar(
                 title = {
-                    val timestamp = state.currentItem.captureTimestamp ?: state.currentItem.lastModified
-                    val dateStr = remember(timestamp) {
-                        SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(timestamp))
-                    }
-                    val timeStr = remember(timestamp) {
-                        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
-                    }
-                    
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            text = dateStr,
-                            maxLines = 1,
-                            color = ImageNextWhite,
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Medium
-                            ),
-                        )
-                        Text(
-                            text = timeStr,
-                            maxLines = 1,
-                            color = ImageNextWhite.copy(alpha = 0.7f),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
+                    Text(
+                        text = state.currentItem.fileName,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = ImageNextWhite,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
                 },
                 navigationIcon = {
                     IconButton(onClick = ::onBackRequested) {
@@ -544,7 +524,6 @@ private fun VideoPoster(
     }
 }
 
-@OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun ActiveVideoPlayer(
     mediaItem: MediaItem,
@@ -1000,17 +979,9 @@ private fun MetadataOverlay(
             MetadataField(label = "Size", value = formatFileSize(mediaItem.size))
         }
 
-        val captureTs = mediaItem.captureTimestamp
-        if (captureTs != null && captureTs > 0) {
+        if (mediaItem.lastModified > 0) {
             Text(
-                text = "Captured: ${formatDate(captureTs)}",
-                color = ImageNextWhite.copy(alpha = 0.6f),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-        } else if (mediaItem.lastModified > 0) {
-            Text(
-                text = "Modified: ${formatDate(mediaItem.lastModified)}",
+                text = "Captured: ${formatDate(mediaItem.lastModified)}",
                 color = ImageNextWhite.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp),
@@ -1056,11 +1027,11 @@ private suspend fun PointerInputScope.detectMetadataSwipeGesture(
         var totalDragY = 0f
 
         while (true) {
-            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+            val event = awaitPointerEvent(pass = PointerEventPass.Final)
             val change = event.changes.firstOrNull { it.id == pointerId } ?: break
             if (!change.pressed) break
 
-            // Observe movement BEFORE children (like ViewerPager) consume it.
+            // Observe only movement that children did not consume so horizontal pager swipes keep priority.
             val delta = change.positionChange()
             totalDragX += delta.x
             totalDragY += delta.y
@@ -1085,7 +1056,7 @@ internal fun shouldDismissMetadataOnSwipe(
 ): Boolean {
     if (totalDragY <= 0f) return false
     if (totalDragY < dismissThresholdPx) return false
-    return abs(totalDragY) > (abs(totalDragX) * 1.5f)
+    return abs(totalDragY) > abs(totalDragX)
 }
 
 internal fun shouldShowMetadataOnSwipe(
@@ -1095,7 +1066,7 @@ internal fun shouldShowMetadataOnSwipe(
 ): Boolean {
     if (totalDragY >= 0f) return false
     if (abs(totalDragY) < showThresholdPx) return false
-    return abs(totalDragY) > (abs(totalDragX) * 1.5f)
+    return abs(totalDragY) > abs(totalDragX)
 }
 
 private fun formatFileSize(bytes: Long): String {

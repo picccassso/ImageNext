@@ -190,9 +190,20 @@ fun AppNavHost(
         ) {
             val photosViewModel: PhotosViewModel = viewModel(
                 factory = PhotosViewModelFactory(
+                    appContext = app.applicationContext,
                     timelineRepository = app.timelineRepository,
                     syncOrchestrator = app.syncOrchestrator,
                     albumRepository = app.albumRepository,
+                    serverReachabilityProbe = reachability@{
+                        val session = app.sessionRepository.getSession()
+                            ?: return@reachability false
+                        app.authApi.validateCredentials(
+                            serverUrl = session.serverUrl,
+                            loginName = session.loginName,
+                            appPassword = session.appPassword,
+                        ) is
+                            com.imagenext.core.network.auth.NextcloudAuthApi.AuthResult.Success
+                    },
                 ),
             )
             PhotosScreen(

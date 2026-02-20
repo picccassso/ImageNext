@@ -8,7 +8,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.FlingBehavior
@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -65,7 +66,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.ContentScale
@@ -91,7 +91,6 @@ import coil3.request.ImageRequest
 import com.imagenext.core.model.MediaItem
 import com.imagenext.core.model.SyncState
 import com.imagenext.core.sync.SyncDependencies
-import com.imagenext.designsystem.ImageNextBlack
 import java.io.File
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -132,6 +131,7 @@ fun PhotosScreen(
     }
     val pagingItems = viewModel.timelineItems.collectAsLazyPagingItems()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
+    val isOffline by viewModel.isOffline.collectAsStateWithLifecycle()
     val albumPickerItems by viewModel.albumPickerItems.collectAsStateWithLifecycle()
     val pendingReturnAnchor by viewModel.pendingReturnAnchor.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -164,11 +164,13 @@ fun PhotosScreen(
             pagingItems.itemCount == 0 &&
             !hasDisplayedPhotos
     val isRefreshing =
-        syncState == SyncState.Running ||
-            (pagingItems.loadState.refresh is LoadState.Loading && pagingItems.itemCount > 0)
-    val isSyncActive = syncState == SyncState.Running || syncState == SyncState.Partial
+        !isOffline && (
+            syncState == SyncState.Running ||
+                (pagingItems.loadState.refresh is LoadState.Loading && pagingItems.itemCount > 0)
+        )
+    val isSyncActive = syncState == SyncState.Running
     val canTriggerManualRefresh =
-        !isSyncActive && pagingItems.loadState.refresh !is LoadState.Loading
+        !isSyncActive && !isOffline && pagingItems.loadState.refresh !is LoadState.Loading
     val pullRefreshState = rememberPullRefreshState(
         refreshing = isRefreshing,
         onRefresh = {
@@ -237,7 +239,7 @@ fun PhotosScreen(
             ),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            SyncStatusBar(syncState = syncState)
+            SyncStatusBar(syncState = syncState, isOffline = isOffline)
 
             when {
                 isInitialLoad -> LoadingState()
@@ -285,15 +287,6 @@ fun PhotosScreen(
             backgroundColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.primary,
         )
-
-        // Glossy top fade
-        Canvas(modifier = Modifier.fillMaxWidth().height(24.dp)) {
-            drawRect(
-                brush = Brush.verticalGradient(
-                    colors = listOf(ImageNextBlack, Color.Transparent)
-                )
-            )
-        }
 
         SnackbarHost(
             hostState = snackbarHostState,
@@ -656,9 +649,41 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun SyncStatusBar(syncState: SyncState) {
+private fun SyncStatusBar(syncState: SyncState, isOffline: Boolean) {
     AnimatedVisibility(
-        visible = syncState == SyncState.Running,
+        visible = isOffline,
+        enter = slideInVertically { -it } + fadeIn(),
+        exit = slideOutVertically { -it } + fadeOut()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.CloudOff,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(modifier = Modifier.size(8.dp))
+            Text(
+                text = "Offline",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.3.sp,
+                ),
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+        }
+    }
+
+    AnimatedVisibility(
+        visible = !isOffline && syncState == SyncState.Running,
         enter = slideInVertically { -it } + fadeIn(),
         exit = slideOutVertically { -it } + fadeOut()
     ) {

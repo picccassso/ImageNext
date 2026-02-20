@@ -122,6 +122,16 @@ interface MediaDao {
     )
     suspend fun markThumbnailReady(remotePath: String, thumbnailPath: String)
 
+    /** Updates capture timestamp from EXIF data when not already set. */
+    @Query(
+        "UPDATE media_items " +
+            "SET captureTimestamp = :captureTimestamp, " +
+            "timelineSortKey = :timelineSortKey " +
+            "WHERE remotePath = :remotePath " +
+            "AND captureTimestamp IS NULL"
+    )
+    suspend fun updateCaptureTimestamp(remotePath: String, captureTimestamp: Long, timelineSortKey: Long)
+
     /** Returns READY items that currently reference an on-disk thumbnail path. */
     @Query(
         "SELECT remotePath, thumbnailPath FROM media_items " +

@@ -1,5 +1,9 @@
 package com.imagenext.feature.photos
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.SystemClock
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -18,6 +22,7 @@ import com.imagenext.core.data.AlbumWriteResult
 import com.imagenext.core.data.TimelineRepository
 import com.imagenext.core.model.SyncState
 import com.imagenext.core.sync.SyncOrchestrator
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -27,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -36,14 +42,86 @@ import kotlinx.coroutines.launch
  * Cached paging data survives configuration changes via [cachedIn].
  */
 class PhotosViewModel(
+    appContext: Context,
     timelineRepository: TimelineRepository,
     private val syncOrchestrator: SyncOrchestrator,
     private val albumRepository: AlbumRepository,
+    private val serverReachabilityProbe: suspend () -> Boolean,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     private var lastForegroundSyncRequestElapsedMs = 0L
     private var suppressNextForegroundSync: Boolean =
         savedStateHandle[KEY_SUPPRESS_NEXT_FOREGROUND_SYNC] ?: false
+
+    private val connectivityManager =
+        appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+    private val _isDeviceOffline = MutableStateFlow(resolveInitialOfflineState())
+    private val _isServerReachable = MutableStateFlow(true)
+    private val _isOffline = MutableStateFlow(_isDeviceOffline.value || !_isServerReachable.value)
+    val isOffline: StateFlow<Boolean> = _isOffline.asStateFlow()
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            setDeviceOffline(!hasActiveNetwork())
+        }
+
+        override fun onLost(network: Network) {
+            setDeviceOffline(!hasActiveNetwork())
+        }
+
+        override fun onCapabilitiesChanged(
+            network: Network,
+            capabilities: NetworkCapabilities,
+        ) {
+            if (network == connectivityManager.activeNetwork) {
+                setDeviceOffline(!capabilities.hasInternetCapability())
+            } else {
+                setDeviceOffline(!hasActiveNetwork())
+            }
+        }
+    }
+
+    private fun resolveInitialOfflineState(): Boolean = !hasActiveNetwork()
+
+    private fun hasActiveNetwork(): Boolean {
+        val activeNetwork = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return false
+        return capabilities.hasInternetCapability()
+    }
+
+    private fun NetworkCapabilities.hasInternetCapability(): Boolean {
+        return hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun setDeviceOffline(isOffline: Boolean) {
+        _isDeviceOffline.value = isOffline
+        updateOfflineState()
+    }
+
+    private fun setServerReachable(isReachable: Boolean) {
+        _isServerReachable.value = isReachable
+        updateOfflineState()
+    }
+
+    private fun updateOfflineState() {
+        _isOffline.value = _isDeviceOffline.value || !_isServerReachable.value
+    }
+
+    private suspend fun refreshServerReachabilityNow(): Boolean {
+        if (_isDeviceOffline.value) {
+            setServerReachable(false)
+            return false
+        }
+
+        val isReachable = try {
+            serverReachabilityProbe()
+        } catch (_: Exception) {
+            false
+        }
+        setServerReachable(isReachable)
+        return isReachable
+    }
 
     /** Paged timeline items with in-stream date headers, cached across config changes. */
     val timelineItems: Flow<PagingData<TimelineItem>> =
@@ -85,12 +163,32 @@ class PhotosViewModel(
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     init {
+        registerNetworkCallback()
+        observeServerReachability()
         observeSync()
         observeAlbumPicker()
         onPhotosForegrounded()
         triggerThumbnailBackfillIfNeeded()
         enableAutoSync()
         triggerBackupDetectorOnLaunch()
+    }
+
+    private fun registerNetworkCallback() {
+        connectivityManager.registerDefaultNetworkCallback(networkCallback)
+    }
+
+    private fun observeServerReachability() {
+        viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                refreshServerReachabilityNow()
+                delay(SERVER_REACHABILITY_REFRESH_MS)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        connectivityManager.unregisterNetworkCallback(networkCallback)
     }
 
     private fun observeSync() {
@@ -111,13 +209,17 @@ class PhotosViewModel(
             return
         }
 
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastForegroundSyncRequestElapsedMs < FOREGROUND_SYNC_MIN_INTERVAL_MS) return
-        lastForegroundSyncRequestElapsedMs = now
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!refreshServerReachabilityNow()) return@launch
 
-        // Perform a foreground freshness check when Photos is entered/resumed.
-        // KEEP policy avoids replacing an already running metadata sync.
-        syncOrchestrator.requestSyncNow()
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastForegroundSyncRequestElapsedMs < FOREGROUND_SYNC_MIN_INTERVAL_MS) return@launch
+            lastForegroundSyncRequestElapsedMs = now
+
+            // Perform a foreground freshness check when Photos is entered/resumed.
+            // KEEP policy avoids replacing an already running metadata sync.
+            syncOrchestrator.requestSyncNow()
+        }
     }
 
     fun onMediaOpened(
@@ -194,18 +296,22 @@ class PhotosViewModel(
 
     /** Pull-to-refresh entrypoint for immediate server-side change detection. */
     fun refreshPhotos() {
-        // User-initiated refresh should replace any stale/infinite in-flight run.
-        syncOrchestrator.retrySync()
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!refreshServerReachabilityNow()) return@launch
+            // User-initiated refresh should replace any stale/infinite in-flight run.
+            syncOrchestrator.retrySync()
+        }
     }
 
     /** Retries sync or re-queues partial thumbnail failures on demand. */
     fun retrySync() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!refreshServerReachabilityNow()) return@launch
             if (_syncState.value == SyncState.Partial) {
                 syncOrchestrator.scheduleThumbnailBackfillIfNeeded(requeueExhaustedFailures = true)
-            } else {
-                syncOrchestrator.retrySync()
             }
+            // Always trigger a metadata sync so remote additions/deletions reconcile immediately.
+            syncOrchestrator.retrySync()
         }
     }
 
@@ -234,6 +340,7 @@ class PhotosViewModel(
     private companion object {
         const val INITIAL_BACKFILL_DELAY_MS = 2500L
         const val FOREGROUND_SYNC_MIN_INTERVAL_MS = 45_000L
+        const val SERVER_REACHABILITY_REFRESH_MS = 10_000L
         const val KEY_SUPPRESS_NEXT_FOREGROUND_SYNC = "photos.suppress_next_foreground_sync"
         const val KEY_RETURN_ANCHOR_REMOTE_PATH = "photos.return_anchor.remote_path"
         const val KEY_RETURN_ANCHOR_FIRST_VISIBLE_INDEX = "photos.return_anchor.first_visible_index"
@@ -254,16 +361,20 @@ data class ReturnAnchor(
  * `viewModel(factory = ...)` at the Photos route.
  */
 class PhotosViewModelFactory(
+    private val appContext: Context,
     private val timelineRepository: TimelineRepository,
     private val syncOrchestrator: SyncOrchestrator,
     private val albumRepository: AlbumRepository,
+    private val serverReachabilityProbe: suspend () -> Boolean,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
         return PhotosViewModel(
+            appContext = appContext,
             timelineRepository = timelineRepository,
             syncOrchestrator = syncOrchestrator,
             albumRepository = albumRepository,
+            serverReachabilityProbe = serverReachabilityProbe,
             savedStateHandle = extras.createSavedStateHandle(),
         ) as T
     }
@@ -271,9 +382,11 @@ class PhotosViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return PhotosViewModel(
+            appContext = appContext,
             timelineRepository = timelineRepository,
             syncOrchestrator = syncOrchestrator,
             albumRepository = albumRepository,
+            serverReachabilityProbe = serverReachabilityProbe,
             savedStateHandle = SavedStateHandle(),
         ) as T
     }

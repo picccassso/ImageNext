@@ -236,7 +236,9 @@ fun SettingsScreen(
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
-                                BackupStatusDisplay(state = uiState.backupSyncState)
+                                if (uiState.backupPolicy.enabled) {
+                                    BackupLastSyncTime(state = uiState.backupSyncState)
+                                }
                             }
                             Switch(
                                 checked = uiState.backupPolicy.enabled,
@@ -265,34 +267,23 @@ fun SettingsScreen(
                             )
                         }
 
-                        // Destination — always visible
-                        Spacer(modifier = Modifier.height(12.dp))
-                        BackupDestinationPicker(
-                            value = uiState.backupPolicy.backupRoot,
-                            isSelectedByUser = uiState.backupPolicy.backupRootSelectedByUser,
-                            needsReselection = uiState.backupRootNeedsReselection,
-                            onOpenPicker = { viewModel.openBackupFolderPicker() },
-                        )
-                        if (uiState.backupRootNeedsReselection) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = if (uiState.backupPolicy.backupRootSelectedByUser) {
-                                    "Current backup folder was not found on server. Please select a new folder."
-                                } else {
-                                    "Select a backup destination to enable backup."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                            TextButton(
-                                onClick = { viewModel.openBackupFolderPicker() },
-                            ) {
-                                Text("Select backup folder")
-                            }
-                        }
-
                         if (uiState.backupPolicy.enabled) {
-                            // Media permission warning — always visible when enabled
+                            // Sync now button — always visible when backup is on
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = { viewModel.syncNowCombined() },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = MaterialTheme.shapes.medium,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                                ),
+                            ) {
+                                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Sync now", color = MaterialTheme.colorScheme.primary)
+                            }
+
+                            // Media permission warning — visible when needed
                             if (
                                 uiState.backupPolicy.sourceScope == BackupSourceScope.FULL_LIBRARY &&
                                 !uiState.hasMediaPermission
@@ -346,7 +337,37 @@ fun SettingsScreen(
                                 exit = shrinkVertically(),
                             ) {
                                 Column {
+                                    // Backup destination (inside collapsible)
+                                    BackupDestinationPicker(
+                                        value = uiState.backupPolicy.backupRoot,
+                                        isSelectedByUser = uiState.backupPolicy.backupRootSelectedByUser,
+                                        needsReselection = uiState.backupRootNeedsReselection,
+                                        onOpenPicker = { viewModel.openBackupFolderPicker() },
+                                    )
+                                    if (uiState.backupRootNeedsReselection) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = if (uiState.backupPolicy.backupRootSelectedByUser) {
+                                                "Current backup folder was not found on server. Please select a new folder."
+                                            } else {
+                                                "Select a backup destination to enable backup."
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                        TextButton(
+                                            onClick = { viewModel.openBackupFolderPicker() },
+                                        ) {
+                                            Text("Select backup folder")
+                                        }
+                                    }
+
+                                    // Full backup status
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    BackupStatusDisplay(state = uiState.backupSyncState)
+
                                     // Source
+                                    Spacer(modifier = Modifier.height(12.dp))
                                     Text(
                                         text = "Source",
                                         style = MaterialTheme.typography.bodySmall,
@@ -613,14 +634,6 @@ fun SettingsScreen(
                                                 label = { Text(deletePolicyLabel(deletePolicy), maxLines = 1) },
                                             )
                                         }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Button(
-                                        onClick = { viewModel.syncNowCombined() },
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Text("Sync now (download + upload)")
                                     }
                                 }
                             }
@@ -1092,6 +1105,45 @@ private fun connectionStatusIconTint(connectionStatus: ConnectionStatus): Color 
 }
 
 @Composable
+private fun BackupLastSyncTime(state: com.imagenext.core.model.BackupSyncState) {
+    val colorMuted = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+    when (state.runState) {
+        BackupRunState.RUNNING -> {
+            Text(
+                text = "Syncing…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        BackupRunState.FAILED -> {
+            Text(
+                text = if (state.failedCount > 0) "${state.failedCount} failed" else "Failed",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        else -> {
+            val label = state.lastRunFinishedAt?.let { ts ->
+                val age = System.currentTimeMillis() - ts
+                when {
+                    age < 60_000L         -> "Just now"
+                    age < 3_600_000L      -> "${age / 60_000L}m ago"
+                    age < 86_400_000L     -> "${age / 3_600_000L}h ago"
+                    age < 7 * 86_400_000L -> "${age / 86_400_000L}d ago"
+                    else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
+                        .format(java.util.Date(ts))
+                }
+            }
+            Text(
+                text = if (label != null) "Last sync: $label" else "Ready",
+                style = MaterialTheme.typography.bodySmall,
+                color = colorMuted,
+            )
+        }
+    }
+}
+
+@Composable
 private fun BackupStatusDisplay(state: com.imagenext.core.model.BackupSyncState) {
     val colorRunning = MaterialTheme.colorScheme.onSurfaceVariant
     val colorDone    = MaterialTheme.colorScheme.primary
@@ -1129,7 +1181,7 @@ private fun BackupStatusDisplay(state: com.imagenext.core.model.BackupSyncState)
                             .background(colorDone)
                     )
                     Text(
-                        text = "Up to date",
+                        text = buildBackupSummaryLine(state),
                         style = MaterialTheme.typography.bodySmall,
                         color = colorDone,
                     )
@@ -1147,21 +1199,12 @@ private fun BackupStatusDisplay(state: com.imagenext.core.model.BackupSyncState)
                             .background(colorFailed)
                     )
                     Text(
-                        text = if (state.failedCount > 0) "${state.failedCount} failed" else "Failed",
+                        text = buildBackupSummaryLine(state),
                         style = MaterialTheme.typography.bodySmall,
                         color = colorFailed,
                     )
                 }
             }
-        }
-
-        if (state.hasLastRun && state.runState != BackupRunState.RUNNING) {
-            BackupLastRunBlock(
-                state = state,
-                colorDone = colorDone,
-                colorFailed = colorFailed,
-                colorMuted = colorMuted,
-            )
         }
     }
 }
@@ -1175,7 +1218,7 @@ private fun BackupRunningRow(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
         Text(
-            text = if (pendingCount > 0) "$pendingCount remaining" else "Uploading\u2026",
+            text = if (pendingCount > 0) "$pendingCount remaining" else "Uploading…",
             style = MaterialTheme.typography.bodySmall,
             color = colorRunning,
         )
@@ -1208,77 +1251,46 @@ private fun BackupRunningRow(
     }
 }
 
-@Composable
-private fun BackupLastRunBlock(
-    state: com.imagenext.core.model.BackupSyncState,
-    colorDone: Color,
-    colorFailed: Color,
-    colorMuted: Color,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
-        state.lastRunFinishedAt?.let { ts ->
-            val label = remember(ts) {
-                val age = System.currentTimeMillis() - ts
-                when {
-                    age < 60_000L         -> "Just now"
-                    age < 3_600_000L      -> "${age / 60_000L}m ago"
-                    age < 86_400_000L     -> "${age / 3_600_000L}h ago"
-                    age < 7 * 86_400_000L -> "${age / 86_400_000L}d ago"
-                    else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
-                        .format(java.util.Date(ts))
-                }
-            }
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = colorMuted,
-            )
-        }
-        val hasStats = state.lastRunUploadedCount > 0 || state.lastRunSkippedCount > 0 ||
-            state.lastRunDeletedCount > 0 || state.lastRunFailedCount > 0
-        if (hasStats) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.xxs),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (state.lastRunUploadedCount > 0) {
-                    BackupStatPill(state.lastRunUploadedCount, "added", colorDone)
-                }
-                if (state.lastRunSkippedCount > 0) {
-                    BackupStatPill(state.lastRunSkippedCount, "skipped", colorMuted)
-                }
-                if (state.lastRunDeletedCount > 0) {
-                    BackupStatPill(state.lastRunDeletedCount, "deleted", colorMuted)
-                }
-                if (state.lastRunFailedCount > 0) {
-                    BackupStatPill(state.lastRunFailedCount, "failed", colorFailed)
-                }
-            }
-        }
-    }
-}
+/**
+ * Builds a single-line summary like "Up to date · Just now · 20 added, 3 skipped"
+ */
+private fun buildBackupSummaryLine(state: com.imagenext.core.model.BackupSyncState): String {
+    val parts = mutableListOf<String>()
 
-@Composable
-private fun BackupStatPill(value: Int, label: String, valueColor: Color) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            .padding(horizontal = Spacing.xs, vertical = Spacing.xxxs),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.xxxs),
-    ) {
-        Text(
-            text = value.toString(),
-            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-            color = valueColor,
+    // Status
+    when (state.runState) {
+        BackupRunState.COMPLETED -> parts.add("Up to date")
+        BackupRunState.FAILED -> parts.add(
+            if (state.failedCount > 0) "${state.failedCount} failed" else "Failed"
         )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        else -> {}
     }
+
+    // Time
+    state.lastRunFinishedAt?.let { ts ->
+        val age = System.currentTimeMillis() - ts
+        val timeLabel = when {
+            age < 60_000L         -> "Just now"
+            age < 3_600_000L      -> "${age / 60_000L}m ago"
+            age < 86_400_000L     -> "${age / 3_600_000L}h ago"
+            age < 7 * 86_400_000L -> "${age / 86_400_000L}d ago"
+            else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
+                .format(java.util.Date(ts))
+        }
+        parts.add(timeLabel)
+    }
+
+    // Stats (inline)
+    val statParts = mutableListOf<String>()
+    if (state.lastRunUploadedCount > 0) statParts.add("${state.lastRunUploadedCount} added")
+    if (state.lastRunSkippedCount > 0) statParts.add("${state.lastRunSkippedCount} skipped")
+    if (state.lastRunDeletedCount > 0) statParts.add("${state.lastRunDeletedCount} deleted")
+    if (state.lastRunFailedCount > 0 && state.runState != BackupRunState.FAILED) {
+        statParts.add("${state.lastRunFailedCount} failed")
+    }
+    if (statParts.isNotEmpty()) parts.add(statParts.joinToString(", "))
+
+    return parts.joinToString(" · ")
 }
 
 private fun modeLabel(mode: BackupSyncMode): String = when (mode) {

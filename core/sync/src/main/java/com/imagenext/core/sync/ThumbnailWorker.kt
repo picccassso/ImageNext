@@ -3,6 +3,7 @@ package com.imagenext.core.sync
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import android.os.SystemClock
 import android.util.Log
@@ -17,6 +18,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.imagenext.core.database.AppDatabase
+import com.imagenext.core.database.dao.MediaDao
 import com.imagenext.core.database.entity.MediaItemEntity
 import com.imagenext.core.model.AuthSession
 import com.imagenext.core.model.MediaKind
@@ -36,6 +38,8 @@ import java.net.SocketTimeoutException
 import java.net.URLEncoder
 import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
@@ -113,6 +117,7 @@ class ThumbnailWorker(
                             item = item,
                             session = session,
                             cacheDir = cacheDir,
+                            mediaDao = mediaDao,
                             disablePreviewEndpointForRun = disablePreviewEndpointForRun,
                         )
                     }
@@ -199,6 +204,13 @@ class ThumbnailWorker(
 
                     is ThumbnailFetchResult.Ready -> {
                         readyUpdates += result.remotePath to result.thumbnailPath
+                        if (result.exifCaptureTimestamp != null) {
+                            mediaDao.updateCaptureTimestamp(
+                                remotePath = result.remotePath,
+                                captureTimestamp = result.exifCaptureTimestamp,
+                                timelineSortKey = result.exifCaptureTimestamp,
+                            )
+                        }
                         totalFetched++
 
                         when (result.source) {
@@ -416,6 +428,7 @@ class ThumbnailWorker(
         item: MediaItemEntity,
         session: AuthSession,
         cacheDir: File,
+        mediaDao: MediaDao,
         disablePreviewEndpointForRun: AtomicBoolean,
     ): ThumbnailFetchResult {
         return try {
@@ -471,10 +484,14 @@ class ThumbnailWorker(
             }
 
             if (fetchedFromPreview) {
+                val exifTimestamp = if (item.captureTimestamp == null && mediaKind == MediaKind.IMAGE) {
+                    extractExifCaptureTimestamp(thumbnailFile)
+                } else null
                 return ThumbnailFetchResult.Ready(
                     remotePath = item.remotePath,
                     thumbnailPath = thumbnailFile.absolutePath,
                     source = ThumbnailSource.Preview,
+                    exifCaptureTimestamp = exifTimestamp,
                 )
             }
 
@@ -671,6 +688,11 @@ class ThumbnailWorker(
                 previewStatusCode = previewStatusCode,
             )
 
+            // Extract EXIF before transcoding (sourceFile has the full original data).
+            val exifTimestamp = if (item.captureTimestamp == null) {
+                extractExifCaptureTimestamp(sourceFile)
+            } else null
+
             try {
                 val scaledBitmap = scaleBitmapToThumbnail(bitmap, THUMBNAIL_SIZE)
                 try {
@@ -680,6 +702,7 @@ class ThumbnailWorker(
                             thumbnailPath = destination.absolutePath,
                             source = ThumbnailSource.ImageTranscode,
                             previewStatusCode = previewStatusCode,
+                            exifCaptureTimestamp = exifTimestamp,
                         )
                     } else {
                         ThumbnailFetchResult.Failed(
@@ -743,6 +766,24 @@ class ThumbnailWorker(
         return Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
     }
 
+    /**
+     * Extracts capture date from EXIF metadata.
+     * Reads TAG_DATETIME_ORIGINAL (primary) and TAG_DATETIME (fallback).
+     * Returns epoch millis or null if not available.
+     */
+    private fun extractExifCaptureTimestamp(file: File): Long? {
+        return try {
+            val exif = ExifInterface(file.absolutePath)
+            val dateString = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+                ?: return null
+            val formatter = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+            formatter.parse(dateString)?.time
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun writeBitmapAsJpeg(bitmap: Bitmap, destination: File): Boolean {
         return try {
             if (destination.exists()) destination.delete()
@@ -766,6 +807,7 @@ class ThumbnailWorker(
             val thumbnailPath: String,
             val source: ThumbnailSource,
             val previewStatusCode: Int? = null,
+            val exifCaptureTimestamp: Long? = null,
         ) : ThumbnailFetchResult
 
         data class Failed(
