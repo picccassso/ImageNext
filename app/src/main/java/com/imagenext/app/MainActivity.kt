@@ -113,6 +113,7 @@ fun ImageNextApp(
     app: ImageNextApplication,
 ) {
     var isLocked by remember { mutableStateOf(app.appLockManager.isLockEnabled()) }
+    var isPhotosSelectionMode by remember { mutableStateOf(false) }
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
@@ -129,7 +130,15 @@ fun ImageNextApp(
     val isOnboarding = currentDestination?.route == NavRoutes.ONBOARDING
     val isFolderSelection = currentDestination?.route == NavRoutes.FOLDER_SELECTION
     val isViewer = currentDestination?.route == NavRoutes.VIEWER
-    val showBottomBar = !isOnboarding && !isFolderSelection && !isViewer && !isLocked
+    val isPhotosRoute = currentDestination?.hierarchy?.any {
+        it.route == BottomNavDestination.Photos.route
+    } == true
+    val showBottomBar =
+        !isOnboarding &&
+            !isFolderSelection &&
+            !isViewer &&
+            !isLocked &&
+            !(isPhotosRoute && isPhotosSelectionMode)
 
     DisposableEffect(lifecycleOwner, app.appLockManager) {
         val observer = LifecycleEventObserver { _, event ->
@@ -226,6 +235,7 @@ fun ImageNextApp(
                 startDestination = startDestination,
                 app = app,
                 onboardingViewModelFactory = onboardingViewModelFactory,
+                onPhotosSelectionModeChanged = { isPhotosSelectionMode = it },
                 modifier = navHostModifier,
             )
             if (isLocked) {

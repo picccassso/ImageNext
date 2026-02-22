@@ -15,7 +15,6 @@ import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.paging.insertSeparators
 import androidx.paging.map
-import com.imagenext.core.data.AddMediaResult
 import com.imagenext.core.data.AlbumPickerItem
 import com.imagenext.core.data.AlbumRepository
 import com.imagenext.core.data.AlbumWriteResult
@@ -29,12 +28,18 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.min
 
 /**
  * Photos tab state orchestration.
@@ -44,7 +49,7 @@ import kotlinx.coroutines.launch
  */
 class PhotosViewModel(
     appContext: Context,
-    timelineRepository: TimelineRepository,
+    private val timelineRepository: TimelineRepository,
     private val syncOrchestrator: SyncOrchestrator,
     private val albumRepository: AlbumRepository,
     private val serverReachabilityProbe: suspend () -> Boolean,
@@ -54,22 +59,24 @@ class PhotosViewModel(
     private var suppressNextForegroundSync: Boolean =
         savedStateHandle[KEY_SUPPRESS_NEXT_FOREGROUND_SYNC] ?: false
 
+    private var pendingSelectAllConfirmation: SelectAllConfirmation? = null
+
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     private val _isDeviceOffline = MutableStateFlow(resolveInitialOfflineState())
-    // Default to false initially, let the first probe update it to true
+    // Default to false initially, let the first probe update it to true.
     private val _isServerReachable = MutableStateFlow(false)
-    
-    val isOffline: StateFlow<Boolean> = kotlinx.coroutines.flow.combine(
+
+    val isOffline: StateFlow<Boolean> = combine(
         _isDeviceOffline,
-        _isServerReachable
+        _isServerReachable,
     ) { deviceOffline, serverReachable ->
         deviceOffline || !serverReachable
     }.stateIn(
         scope = viewModelScope,
-        started = kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
-        initialValue = _isDeviceOffline.value || !_isServerReachable.value
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = _isDeviceOffline.value || !_isServerReachable.value,
     )
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -120,7 +127,7 @@ class PhotosViewModel(
         }
 
         val isReachable = try {
-            kotlinx.coroutines.withTimeoutOrNull(5000L) {
+            withTimeoutOrNull(5000L) {
                 serverReachabilityProbe()
             } ?: false
         } catch (_: Exception) {
@@ -166,8 +173,16 @@ class PhotosViewModel(
     private val _pendingReturnAnchor = MutableStateFlow(loadSavedReturnAnchor())
     val pendingReturnAnchor: StateFlow<ReturnAnchor?> = _pendingReturnAnchor.asStateFlow()
 
+    private val _selectionState = MutableStateFlow(
+        PhotosSelectionState(maxSelectableCount = SELECTION_CAP),
+    )
+    val selectionState: StateFlow<PhotosSelectionState> = _selectionState.asStateFlow()
+
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
+
+    private val _uiEvents = MutableSharedFlow<PhotosUiEvent>(extraBufferCapacity = 1)
+    val uiEvents: SharedFlow<PhotosUiEvent> = _uiEvents.asSharedFlow()
 
     init {
         registerNetworkCallback()
@@ -249,6 +264,178 @@ class PhotosViewModel(
         persistReturnAnchor(null)
     }
 
+    fun onMediaLongPressed(remotePath: String) {
+        if (remotePath.isBlank()) return
+        viewModelScope.launch {
+            val selectableCount = refreshSelectableCount()
+            when (
+                val mutation = selectFromLongPress(
+                    state = _selectionState.value,
+                    remotePath = remotePath,
+                    selectableCount = selectableCount,
+                    maxSelectableCount = SELECTION_CAP,
+                )
+            ) {
+                is SelectionMutation.Updated -> _selectionState.value = mutation.state
+                SelectionMutation.CapExceeded -> _messages.tryEmit("You can select up to $SELECTION_CAP items")
+                SelectionMutation.NoChange -> Unit
+            }
+        }
+    }
+
+    fun onMediaTappedInSelection(remotePath: String) {
+        if (remotePath.isBlank()) return
+        if (!_selectionState.value.isSelectionMode) return
+        viewModelScope.launch {
+            val selectableCount = refreshSelectableCount()
+            when (
+                val mutation = toggleFromTap(
+                    state = _selectionState.value,
+                    remotePath = remotePath,
+                    selectableCount = selectableCount,
+                    maxSelectableCount = SELECTION_CAP,
+                )
+            ) {
+                is SelectionMutation.Updated -> _selectionState.value = mutation.state
+                SelectionMutation.CapExceeded -> _messages.tryEmit("You can select up to $SELECTION_CAP items")
+                SelectionMutation.NoChange -> Unit
+            }
+        }
+    }
+
+    fun onSelectAllToggle() {
+        viewModelScope.launch {
+            val totalCount = withContext(Dispatchers.IO) { timelineRepository.getMediaCount() }
+            val selectableCount = min(totalCount, SELECTION_CAP)
+            val current = _selectionState.value
+
+            if (selectableCount <= 0) {
+                exitSelectionMode()
+                return@launch
+            }
+
+            if (shouldClearAllFromToggle(current, selectableCount)) {
+                // Toggle behavior: if everything selectable is already selected, clear all.
+                exitSelectionMode()
+                return@launch
+            }
+
+            if (totalCount > SELECTION_CAP) {
+                pendingSelectAllConfirmation = SelectAllConfirmation(totalCount = totalCount)
+                _selectionState.value = current.copy(
+                    isSelectionMode = true,
+                    selectableCount = selectableCount,
+                    maxSelectableCount = SELECTION_CAP,
+                )
+                _uiEvents.tryEmit(
+                    PhotosUiEvent.ConfirmSelectAll(
+                        totalCount = totalCount,
+                        cappedCount = SELECTION_CAP,
+                    )
+                )
+                return@launch
+            }
+
+            val allRemotePaths = withContext(Dispatchers.IO) {
+                timelineRepository.getTimelineRemotePaths(selectableCount)
+            }
+            _selectionState.value = applySelectAllState(
+                remotePaths = allRemotePaths,
+                selectableCount = selectableCount,
+                maxSelectableCount = SELECTION_CAP,
+            )
+        }
+    }
+
+    fun confirmSelectAll() {
+        val pending = pendingSelectAllConfirmation ?: return
+        pendingSelectAllConfirmation = null
+        viewModelScope.launch {
+            val allRemotePaths = withContext(Dispatchers.IO) {
+                timelineRepository.getTimelineRemotePaths(SELECTION_CAP)
+            }
+            _selectionState.value = applySelectAllState(
+                remotePaths = allRemotePaths,
+                selectableCount = min(pending.totalCount, SELECTION_CAP),
+                maxSelectableCount = SELECTION_CAP,
+            )
+        }
+    }
+
+    fun cancelSelectAllPrompt() {
+        pendingSelectAllConfirmation = null
+    }
+
+    fun exitSelectionMode() {
+        pendingSelectAllConfirmation = null
+        _selectionState.value = PhotosSelectionState(maxSelectableCount = SELECTION_CAP)
+    }
+
+    fun createAlbumForSelectionPicker(albumName: String) {
+        viewModelScope.launch {
+            when (val createResult = albumRepository.createAlbum(albumName)) {
+                is AlbumWriteResult.Success -> {
+                    _messages.tryEmit("Album created")
+                    _uiEvents.tryEmit(PhotosUiEvent.AutoSelectAlbum(createResult.albumId))
+                }
+                is AlbumWriteResult.EmptyName -> {
+                    _messages.tryEmit("Album name cannot be empty")
+                }
+                is AlbumWriteResult.DuplicateName -> {
+                    if (createResult.existingAlbumId > 0L) {
+                        _messages.tryEmit("Album exists. Selected existing album")
+                        _uiEvents.tryEmit(PhotosUiEvent.AutoSelectAlbum(createResult.existingAlbumId))
+                    } else {
+                        _messages.tryEmit("Album name already exists")
+                    }
+                }
+                is AlbumWriteResult.NotFound -> {
+                    _messages.tryEmit("Album not found")
+                }
+            }
+        }
+    }
+
+    fun applySelectionToAlbums(targets: List<AlbumApplyTarget>) {
+        val mediaSnapshot = _selectionState.value.selectedRemotePaths.toList()
+        val targetSnapshot = targets.distinctBy { it.albumId }
+
+        if (mediaSnapshot.isEmpty()) {
+            _messages.tryEmit("No items selected")
+            return
+        }
+        if (targetSnapshot.isEmpty()) {
+            _messages.tryEmit("Select at least one album")
+            return
+        }
+
+        // Background fire-and-forget: clear selection state immediately.
+        exitSelectionMode()
+        _messages.tryEmit("Adding to albums...")
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val outcomes = targetSnapshot.map { target ->
+                AlbumApplySummaryRow(
+                    albumName = target.albumName,
+                    result = albumRepository.addMediaToAlbumBulk(target.albumId, mediaSnapshot),
+                )
+            }
+            _messages.tryEmit(buildAlbumApplySummaryMessage(outcomes, visibleLimit = BULK_RESULT_VISIBLE_LIMIT))
+        }
+    }
+
+    private suspend fun refreshSelectableCount(): Int {
+        val totalCount = withContext(Dispatchers.IO) { timelineRepository.getMediaCount() }
+        val selectableCount = min(totalCount, SELECTION_CAP)
+        _selectionState.update { current ->
+            current.copy(
+                selectableCount = selectableCount,
+                maxSelectableCount = SELECTION_CAP,
+            )
+        }
+        return selectableCount
+    }
+
     private fun loadSavedReturnAnchor(): ReturnAnchor? {
         val remotePath = savedStateHandle.get<String>(KEY_RETURN_ANCHOR_REMOTE_PATH) ?: return null
         val index = savedStateHandle.get<Int>(KEY_RETURN_ANCHOR_FIRST_VISIBLE_INDEX) ?: 0
@@ -322,28 +509,6 @@ class PhotosViewModel(
         }
     }
 
-    fun addMediaToAlbum(albumId: Long, mediaRemotePath: String) {
-        viewModelScope.launch {
-            when (albumRepository.addMediaToAlbum(albumId, mediaRemotePath)) {
-                AddMediaResult.Added -> _messages.tryEmit("Added to album")
-                AddMediaResult.AlreadyInAlbum -> _messages.tryEmit("Already in album")
-                AddMediaResult.AlbumNotFound -> _messages.tryEmit("Album not found")
-                AddMediaResult.MediaNotFound -> _messages.tryEmit("Photo not found")
-            }
-        }
-    }
-
-    fun createAlbumAndAdd(albumName: String, mediaRemotePath: String) {
-        viewModelScope.launch {
-            when (val createResult = albumRepository.createAlbum(albumName)) {
-                is AlbumWriteResult.Success -> addMediaToAlbum(createResult.albumId, mediaRemotePath)
-                is AlbumWriteResult.EmptyName -> _messages.tryEmit("Album name cannot be empty")
-                is AlbumWriteResult.DuplicateName -> addMediaToAlbum(createResult.existingAlbumId, mediaRemotePath)
-                is AlbumWriteResult.NotFound -> _messages.tryEmit("Album not found")
-            }
-        }
-    }
-
     private companion object {
         const val INITIAL_BACKFILL_DELAY_MS = 2500L
         const val FOREGROUND_SYNC_MIN_INTERVAL_MS = 45_000L
@@ -353,8 +518,43 @@ class PhotosViewModel(
         const val KEY_RETURN_ANCHOR_FIRST_VISIBLE_INDEX = "photos.return_anchor.first_visible_index"
         const val KEY_RETURN_ANCHOR_FIRST_VISIBLE_OFFSET = "photos.return_anchor.first_visible_offset"
         const val KEY_RETURN_ANCHOR_READY = "photos.return_anchor.ready"
+        const val SELECTION_CAP = 500
+        const val BULK_RESULT_VISIBLE_LIMIT = 2
     }
 }
+
+data class PhotosSelectionState(
+    val isSelectionMode: Boolean = false,
+    val selectedRemotePaths: Set<String> = emptySet(),
+    val selectableCount: Int = 0,
+    val maxSelectableCount: Int,
+) {
+    val selectedCount: Int
+        get() = selectedRemotePaths.size
+
+    val isAllSelectableSelected: Boolean
+        get() = selectableCount > 0 && selectedCount == selectableCount
+}
+
+sealed interface PhotosUiEvent {
+    data class ConfirmSelectAll(
+        val totalCount: Int,
+        val cappedCount: Int,
+    ) : PhotosUiEvent
+
+    data class AutoSelectAlbum(
+        val albumId: Long,
+    ) : PhotosUiEvent
+}
+
+data class AlbumApplyTarget(
+    val albumId: Long,
+    val albumName: String,
+)
+
+private data class SelectAllConfirmation(
+    val totalCount: Int,
+)
 
 data class ReturnAnchor(
     val remotePath: String,

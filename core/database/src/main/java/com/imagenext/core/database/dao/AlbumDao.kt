@@ -87,6 +87,9 @@ interface AlbumDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAlbumMedia(ref: AlbumMediaCrossRefEntity): Long
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAlbumMedia(refs: List<AlbumMediaCrossRefEntity>): List<Long>
+
     @Query(
         "DELETE FROM album_media_cross_ref " +
             "WHERE albumId = :albumId AND mediaRemotePath = :mediaRemotePath"

@@ -37,6 +37,13 @@ sealed interface AddMediaResult {
     data object MediaNotFound : AddMediaResult
 }
 
+data class AddMediaBulkResult(
+    val addedCount: Int,
+    val alreadyInAlbumCount: Int,
+    val mediaNotFoundCount: Int,
+    val albumNotFound: Boolean,
+)
+
 sealed interface RemoveMediaResult {
     data object Removed : RemoveMediaResult
     data object NotInAlbum : RemoveMediaResult
@@ -204,6 +211,76 @@ class AlbumRepository(
         } catch (_: SQLiteConstraintException) {
             AddMediaResult.MediaNotFound
         }
+    }
+
+    suspend fun addMediaToAlbumBulk(
+        albumId: Long,
+        mediaRemotePaths: List<String>,
+    ): AddMediaBulkResult {
+        val normalizedPaths = mediaRemotePaths
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+        if (normalizedPaths.isEmpty()) {
+            return AddMediaBulkResult(
+                addedCount = 0,
+                alreadyInAlbumCount = 0,
+                mediaNotFoundCount = 0,
+                albumNotFound = false,
+            )
+        }
+
+        if (isSystemAlbum(albumId)) {
+            return AddMediaBulkResult(
+                addedCount = 0,
+                alreadyInAlbumCount = 0,
+                mediaNotFoundCount = normalizedPaths.size,
+                albumNotFound = true,
+            )
+        }
+        if (albumDao.getAlbum(albumId) == null) {
+            return AddMediaBulkResult(
+                addedCount = 0,
+                alreadyInAlbumCount = 0,
+                mediaNotFoundCount = normalizedPaths.size,
+                albumNotFound = true,
+            )
+        }
+
+        val existingPaths = mediaDao.getExistingRemotePaths(normalizedPaths).toSet()
+        if (existingPaths.isEmpty()) {
+            return AddMediaBulkResult(
+                addedCount = 0,
+                alreadyInAlbumCount = 0,
+                mediaNotFoundCount = normalizedPaths.size,
+                albumNotFound = false,
+            )
+        }
+
+        val now = System.currentTimeMillis()
+        val refs = existingPaths.map { remotePath ->
+            AlbumMediaCrossRefEntity(
+                albumId = albumId,
+                mediaRemotePath = remotePath,
+                addedAt = now,
+            )
+        }
+        val insertResults = albumDao.insertAlbumMedia(refs)
+        val addedCount = insertResults.count { it != -1L }
+        val alreadyCount = insertResults.size - addedCount
+        val notFoundCount = normalizedPaths.size - existingPaths.size
+        if (addedCount > 0) {
+            albumDao.touchAlbum(albumId, System.currentTimeMillis())
+        }
+
+        return AddMediaBulkResult(
+            addedCount = addedCount,
+            alreadyInAlbumCount = alreadyCount,
+            mediaNotFoundCount = notFoundCount,
+            albumNotFound = false,
+        )
     }
 
     suspend fun removeMediaFromAlbum(albumId: Long, mediaRemotePath: String): RemoveMediaResult {

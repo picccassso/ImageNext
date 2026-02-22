@@ -85,6 +85,7 @@ fun AppNavHost(
     startDestination: String,
     app: ImageNextApplication,
     onboardingViewModelFactory: OnboardingViewModelFactory,
+    onPhotosSelectionModeChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     NavHost(
@@ -212,6 +213,7 @@ fun AppNavHost(
                 onMediaClick = { request ->
                     navController.navigate(NavRoutes.viewerRoute(request))
                 },
+                onSelectionModeChanged = onPhotosSelectionModeChanged,
             )
         }
 

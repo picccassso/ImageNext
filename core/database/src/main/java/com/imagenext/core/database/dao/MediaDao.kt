@@ -315,4 +315,12 @@ interface MediaDao {
     /** Returns all matching media items for bulk merge logic. */
     @Query("SELECT * FROM media_items WHERE remotePath IN (:remotePaths)")
     suspend fun getByRemotePaths(remotePaths: List<String>): List<MediaItemEntity>
+
+    /** Returns existing remote paths from the provided candidate set. */
+    @Query("SELECT remotePath FROM media_items WHERE remotePath IN (:remotePaths)")
+    suspend fun getExistingRemotePaths(remotePaths: List<String>): List<String>
+
+    /** Returns newest timeline remote paths capped by [limit]. */
+    @Query("SELECT remotePath FROM media_items ORDER BY timelineSortKey DESC, remotePath DESC LIMIT :limit")
+    suspend fun getTimelineRemotePaths(limit: Int): List<String>
 }

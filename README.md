@@ -63,6 +63,7 @@ feature/      — UI features (onboarding, folders, photos, viewer, albums, sett
 
 **2026-02-22**
 
+- Added multi-select to Photos — long-press to enter selection mode, tap to toggle, add selected media to multiple albums at once. Selection capped at 500 items with "Select all" confirmation for large timelines.
 - Added fast scrollbar to Photos grid — drag thumb for proportional scrolling, or pull left for month-by-month scrub mode.
 - Refined scrollbar UI with smooth spring animations and a clean thumb indicator (no date bubble).
 - Offline banner now properly suppresses infinite loading spinners when server is unreachable.

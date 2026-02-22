@@ -56,4 +56,10 @@ class TimelineRepository(
 
     /** Returns the total count of media items. */
     suspend fun getMediaCount(): Int = mediaDao.getCount()
+
+    /** Returns newest timeline remote paths capped by [limit]. */
+    suspend fun getTimelineRemotePaths(limit: Int): List<String> {
+        if (limit <= 0) return emptyList()
+        return mediaDao.getTimelineRemotePaths(limit)
+    }
 }
