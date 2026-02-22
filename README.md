@@ -61,6 +61,12 @@ feature/      — UI features (onboarding, folders, photos, viewer, albums, sett
 
 ## Recent Changes
 
+**2026-02-22**
+
+- Added fast scrollbar to Photos grid — drag thumb for proportional scrolling, or pull left for month-by-month scrub mode.
+- Refined scrollbar UI with smooth spring animations and a clean thumb indicator (no date bubble).
+- Offline banner now properly suppresses infinite loading spinners when server is unreachable.
+
 **2026-02-20**
 
 - Videos now auto-loop and the play button correctly restarts after reaching the end.

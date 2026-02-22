@@ -255,25 +255,36 @@ fun PhotosScreen(
                     EmptyState(syncState = syncState)
                 }
                 else -> {
-                    PhotosGrid(
-                        pagingItems = pagingItems,
-                        gridState = gridState,
-                        flingBehavior = gridFlingBehavior,
-                        allowRemotePreview = allowRemotePreview,
-                        onMediaClick = { request ->
-                            viewModel.onMediaOpened(
-                                remotePath = request.remotePath,
-                                firstVisibleItemIndex = gridState.firstVisibleItemIndex,
-                                firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
-                            )
-                            onMediaClick(request)
-                        },
-                        onMediaLongClick = { mediaItem ->
-                            pendingAlbumTarget = mediaItem
-                        },
-                        remotePreviewAuth = remotePreviewAuth,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        PhotosGrid(
+                            pagingItems = pagingItems,
+                            gridState = gridState,
+                            flingBehavior = gridFlingBehavior,
+                            allowRemotePreview = allowRemotePreview,
+                            onMediaClick = { request ->
+                                viewModel.onMediaOpened(
+                                    remotePath = request.remotePath,
+                                    firstVisibleItemIndex = gridState.firstVisibleItemIndex,
+                                    firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
+                                )
+                                onMediaClick(request)
+                            },
+                            onMediaLongClick = { mediaItem ->
+                                pendingAlbumTarget = mediaItem
+                            },
+                            remotePreviewAuth = remotePreviewAuth,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+
+                        PhotosScrollbar(
+                            gridState = gridState,
+                            pagingItems = pagingItems,
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .statusBarsPadding()
+                                .padding(top = 16.dp, bottom = 16.dp)
+                        )
+                    }
                 }
             }
         }

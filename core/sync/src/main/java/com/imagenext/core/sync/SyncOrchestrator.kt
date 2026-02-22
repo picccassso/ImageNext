@@ -512,17 +512,20 @@ class SyncOrchestrator(
         val latestThumbnailState = latestThumbnailInfo?.state
 
         // Treat enqueued/blocked library work as in-flight to avoid stale failed-state flashes
-        // when a fresh sync has already been scheduled.
+        // when a fresh sync has already been scheduled. However, if runAttemptCount > 0, it means
+        // the worker is in exponential backoff (retry) state, so we shouldn't show a continuous spinner.
+        val libraryRunAttemptCount = latestLibraryInfo?.runAttemptCount ?: 0
         if (
             latestLibraryState == WorkInfo.State.RUNNING ||
-            latestLibraryState == WorkInfo.State.ENQUEUED ||
-            latestLibraryState == WorkInfo.State.BLOCKED
+            (latestLibraryState == WorkInfo.State.ENQUEUED && libraryRunAttemptCount == 0) ||
+            (latestLibraryState == WorkInfo.State.BLOCKED && libraryRunAttemptCount == 0)
         ) {
             return SyncState.Running
         }
 
-        // Thumbnail-only backfill should not show as hard "loading".
-        if (latestThumbnailState == WorkInfo.State.RUNNING || latestThumbnailState == WorkInfo.State.ENQUEUED) {
+        // Thumbnail-only backfill should not show as hard "loading" either, unless it's genuinely new.
+        val thumbnailRunAttemptCount = latestThumbnailInfo?.runAttemptCount ?: 0
+        if (latestThumbnailState == WorkInfo.State.RUNNING || (latestThumbnailState == WorkInfo.State.ENQUEUED && thumbnailRunAttemptCount == 0)) {
             return SyncState.Partial
         }
 

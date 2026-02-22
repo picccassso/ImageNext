@@ -58,4 +58,5 @@ class StubMediaDao : MediaDao {
     override suspend fun getVideosList(): List<MediaItemEntity> = emptyList()
     override suspend fun getAlbumMediaList(albumId: Long): List<MediaItemEntity> = emptyList()
     override suspend fun getByRemotePaths(remotePaths: List<String>): List<MediaItemEntity> = emptyList()
+    override suspend fun updateCaptureTimestamp(remotePath: String, captureTimestamp: Long, timelineSortKey: Long) {}
 }

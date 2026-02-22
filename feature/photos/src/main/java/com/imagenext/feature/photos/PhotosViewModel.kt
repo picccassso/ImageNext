@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -57,9 +58,19 @@ class PhotosViewModel(
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     private val _isDeviceOffline = MutableStateFlow(resolveInitialOfflineState())
-    private val _isServerReachable = MutableStateFlow(true)
-    private val _isOffline = MutableStateFlow(_isDeviceOffline.value || !_isServerReachable.value)
-    val isOffline: StateFlow<Boolean> = _isOffline.asStateFlow()
+    // Default to false initially, let the first probe update it to true
+    private val _isServerReachable = MutableStateFlow(false)
+    
+    val isOffline: StateFlow<Boolean> = kotlinx.coroutines.flow.combine(
+        _isDeviceOffline,
+        _isServerReachable
+    ) { deviceOffline, serverReachable ->
+        deviceOffline || !serverReachable
+    }.stateIn(
+        scope = viewModelScope,
+        started = kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
+        initialValue = _isDeviceOffline.value || !_isServerReachable.value
+    )
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -96,16 +107,10 @@ class PhotosViewModel(
 
     private fun setDeviceOffline(isOffline: Boolean) {
         _isDeviceOffline.value = isOffline
-        updateOfflineState()
     }
 
     private fun setServerReachable(isReachable: Boolean) {
         _isServerReachable.value = isReachable
-        updateOfflineState()
-    }
-
-    private fun updateOfflineState() {
-        _isOffline.value = _isDeviceOffline.value || !_isServerReachable.value
     }
 
     private suspend fun refreshServerReachabilityNow(): Boolean {
@@ -115,7 +120,9 @@ class PhotosViewModel(
         }
 
         val isReachable = try {
-            serverReachabilityProbe()
+            kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                serverReachabilityProbe()
+            } ?: false
         } catch (_: Exception) {
             false
         }
