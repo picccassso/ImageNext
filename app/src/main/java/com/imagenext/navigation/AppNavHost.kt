@@ -1,10 +1,15 @@
 package com.imagenext.navigation
 
+import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
@@ -13,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -79,6 +85,106 @@ object NavRoutes {
     }
 }
 
+/** Hierarchical forward transition — slide in from right with fade. */
+fun AnimatedContentTransitionScope<NavBackStackEntry>.hierarchicalEnter(): EnterTransition {
+    return slideInHorizontally(
+        initialOffsetX = { (it * Motion.SlideDistance.FULL).toInt() },
+        animationSpec = Motion.Transitions.SlideInRightOffset,
+    ) + fadeIn(
+        animationSpec = Motion.Transitions.FadeIn,
+        initialAlpha = 0.7f,
+    )
+}
+
+/** Hierarchical exit transition — slide out to left with fade. */
+fun AnimatedContentTransitionScope<NavBackStackEntry>.hierarchicalExit(): ExitTransition {
+    return slideOutHorizontally(
+        targetOffsetX = { -(it * Motion.SlideDistance.FULL * 0.5f).toInt() },
+        animationSpec = Motion.Transitions.SlideOutLeftOffset,
+    ) + fadeOut(
+        animationSpec = Motion.Transitions.FadeOut,
+        targetAlpha = 0.5f,
+    )
+}
+
+/** Hierarchical pop enter — slide in from left with fade. */
+fun AnimatedContentTransitionScope<NavBackStackEntry>.hierarchicalPopEnter(): EnterTransition {
+    return slideInHorizontally(
+        initialOffsetX = { -(it * Motion.SlideDistance.FULL * 0.5f).toInt() },
+        animationSpec = Motion.Transitions.SlideInLeftOffset,
+    ) + fadeIn(
+        animationSpec = Motion.Transitions.FadeIn,
+        initialAlpha = 0.5f,
+    )
+}
+
+/** Hierarchical pop exit — slide out to right with fade. */
+fun AnimatedContentTransitionScope<NavBackStackEntry>.hierarchicalPopExit(): ExitTransition {
+    return slideOutHorizontally(
+        targetOffsetX = { (it * Motion.SlideDistance.FULL).toInt() },
+        animationSpec = Motion.Transitions.SlideOutRightOffset,
+    ) + fadeOut(
+        animationSpec = Motion.Transitions.FadeOut,
+        targetAlpha = 0.7f,
+    )
+}
+
+/** Full screen modal transition — scale + fade for immersive experiences. */
+fun AnimatedContentTransitionScope<NavBackStackEntry>.modalEnter(): EnterTransition {
+    return scaleIn(
+        initialScale = 0.92f,
+        animationSpec = Motion.Transitions.ScaleFadeIn,
+    ) + fadeIn(
+        animationSpec = Motion.Transitions.SharedElement,
+    )
+}
+
+/** Full screen modal exit — scale down + fade. */
+fun AnimatedContentTransitionScope<NavBackStackEntry>.modalExit(): ExitTransition {
+    return scaleOut(
+        targetScale = 0.95f,
+        animationSpec = Motion.Transitions.ScaleFadeOut,
+    ) + fadeOut(
+        animationSpec = Motion.Transitions.FadeOut,
+    )
+}
+
+/** Bottom navigation tab switch — subtle fade with slight slide. */
+fun AnimatedContentTransitionScope<NavBackStackEntry>.bottomNavEnter(): EnterTransition {
+    return fadeIn(
+        animationSpec = tween(Motion.DURATION_MEDIUM_MS, easing = Motion.Easing.Standard),
+        initialAlpha = 0.0f,
+    ) + slideInHorizontally(
+        initialOffsetX = { (it * Motion.SlideDistance.SHORT).toInt() },
+        animationSpec = Motion.Transitions.BottomNavSlideIn,
+    )
+}
+
+/** Bottom navigation tab exit — quick fade out. */
+fun AnimatedContentTransitionScope<NavBackStackEntry>.bottomNavExit(): ExitTransition {
+    return fadeOut(
+        animationSpec = tween(Motion.DURATION_SHORT_MS, easing = Motion.Easing.Standard),
+        targetAlpha = 0.0f,
+    ) + slideOutHorizontally(
+        targetOffsetX = { -(it * Motion.SlideDistance.SHORT).toInt() },
+        animationSpec = Motion.Transitions.BottomNavSlideOut,
+    )
+}
+
+/** Standard fade transition for simple screens. */
+fun standardFadeIn(): EnterTransition {
+    return fadeIn(
+        animationSpec = tween(Motion.DURATION_MEDIUM_MS, easing = Motion.Easing.Emphasized),
+    )
+}
+
+/** Standard fade out transition. */
+fun standardFadeOut(): ExitTransition {
+    return fadeOut(
+        animationSpec = tween(Motion.DURATION_SHORT_MS, easing = Motion.Easing.Standard),
+    )
+}
+
 @Composable
 fun AppNavHost(
     navController: NavHostController,
@@ -92,19 +198,12 @@ fun AppNavHost(
         navController = navController,
         startDestination = startDestination,
         modifier = modifier,
-        enterTransition = {
-            fadeIn(animationSpec = tween(250, easing = Motion.Easing.Emphasized))
-        },
-        exitTransition = {
-            fadeOut(animationSpec = tween(200))
-        },
-        popEnterTransition = {
-            fadeIn(animationSpec = tween(250, easing = Motion.Easing.Emphasized))
-        },
-        popExitTransition = {
-            fadeOut(animationSpec = tween(200))
-        }
+        enterTransition = { hierarchicalEnter() },
+        exitTransition = { hierarchicalExit() },
+        popEnterTransition = { hierarchicalPopEnter() },
+        popExitTransition = { hierarchicalPopExit() },
     ) {
+        // Viewer screen with modal-style transition
         composable(
             route = NavRoutes.VIEWER,
             arguments = listOf(
@@ -115,10 +214,10 @@ fun AppNavHost(
                 navArgument("originHeight") { type = NavType.IntType; defaultValue = -1 },
                 navArgument("albumId") { type = NavType.LongType; defaultValue = -1L },
             ),
-            enterTransition = { EnterTransition.None },
-            exitTransition = { ExitTransition.None },
-            popEnterTransition = { EnterTransition.None },
-            popExitTransition = { ExitTransition.None },
+            enterTransition = { modalEnter() },
+            exitTransition = { modalExit() },
+            popEnterTransition = { modalEnter() },
+            popExitTransition = { modalExit() },
         ) { backStackEntry ->
             val encodedPath = backStackEntry.arguments?.getString("remotePath") ?: ""
             val remotePath = URLDecoder.decode(encodedPath, "UTF-8")
@@ -139,8 +238,14 @@ fun AppNavHost(
             )
         }
 
-        // Standard routes
-        composable(route = NavRoutes.ONBOARDING) {
+        // Onboarding with standard fade
+        composable(
+            route = NavRoutes.ONBOARDING,
+            enterTransition = { standardFadeIn() },
+            exitTransition = { standardFadeOut() },
+            popEnterTransition = { standardFadeIn() },
+            popExitTransition = { standardFadeOut() },
+        ) {
             val onboardingViewModel: OnboardingViewModel = viewModel(factory = onboardingViewModelFactory)
             OnboardingScreen(
                 viewModel = onboardingViewModel,
@@ -152,7 +257,14 @@ fun AppNavHost(
             )
         }
 
-        composable(route = NavRoutes.FOLDER_SELECTION) {
+        // Folder selection with hierarchical transition
+        composable(
+            route = NavRoutes.FOLDER_SELECTION,
+            enterTransition = { hierarchicalEnter() },
+            exitTransition = { hierarchicalExit() },
+            popEnterTransition = { hierarchicalPopEnter() },
+            popExitTransition = { hierarchicalPopExit() },
+        ) {
             val session = app.sessionRepository.getSession()
             if (session == null) {
                 LaunchedEffect(Unit) {
@@ -182,12 +294,13 @@ fun AppNavHost(
             }
         }
 
+        // Photos with bottom nav style transitions
         composable(
             route = BottomNavDestination.Photos.route,
-            enterTransition = { EnterTransition.None },
-            popEnterTransition = { EnterTransition.None },
-            exitTransition = { ExitTransition.None },
-            popExitTransition = { ExitTransition.None },
+            enterTransition = { bottomNavEnter() },
+            popEnterTransition = { bottomNavEnter() },
+            exitTransition = { bottomNavExit() },
+            popExitTransition = { bottomNavExit() },
         ) {
             val photosViewModel: PhotosViewModel = viewModel(
                 factory = PhotosViewModelFactory(
@@ -217,7 +330,14 @@ fun AppNavHost(
             )
         }
 
-        composable(route = BottomNavDestination.Albums.route) {
+        // Albums with bottom nav style transitions
+        composable(
+            route = BottomNavDestination.Albums.route,
+            enterTransition = { bottomNavEnter() },
+            popEnterTransition = { bottomNavEnter() },
+            exitTransition = { bottomNavExit() },
+            popExitTransition = { bottomNavExit() },
+        ) {
             val albumsViewModel: AlbumsViewModel = viewModel(
                 factory = AlbumsViewModelFactory(
                     albumRepository = app.albumRepository,
@@ -229,11 +349,16 @@ fun AppNavHost(
             )
         }
 
+        // Album detail with hierarchical transition
         composable(
             route = NavRoutes.ALBUM_DETAIL,
             arguments = listOf(
                 navArgument("albumId") { type = NavType.LongType },
             ),
+            enterTransition = { hierarchicalEnter() },
+            exitTransition = { hierarchicalExit() },
+            popEnterTransition = { hierarchicalPopEnter() },
+            popExitTransition = { hierarchicalPopExit() },
         ) { backStackEntry ->
             val albumId = backStackEntry.arguments?.getLong("albumId")
                 ?: return@composable
@@ -261,7 +386,14 @@ fun AppNavHost(
             )
         }
 
-        composable(route = BottomNavDestination.Settings.route) {
+        // Settings with bottom nav style transitions
+        composable(
+            route = BottomNavDestination.Settings.route,
+            enterTransition = { bottomNavEnter() },
+            popEnterTransition = { bottomNavEnter() },
+            exitTransition = { bottomNavExit() },
+            popExitTransition = { bottomNavExit() },
+        ) {
             val settingsViewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModelFactory(
                     sessionRepository = app.sessionRepository,

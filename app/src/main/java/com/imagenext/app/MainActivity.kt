@@ -184,6 +184,10 @@ fun ImageNextApp(
                             NavigationBarItem(
                                 selected = selected,
                                 onClick = {
+                                    // When leaving the Albums tab, pop any album detail to return to list root
+                                    if (destination.route != BottomNavDestination.Albums.route) {
+                                        navController.popBackStack(NavRoutes.ALBUMS, inclusive = false)
+                                    }
                                     navController.navigate(destination.route) {
                                         popUpTo(navController.graph.startDestinationId) {
                                             saveState = true
