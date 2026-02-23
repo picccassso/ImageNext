@@ -401,6 +401,7 @@ private fun ViewerOverflowMenu(
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
+            containerColor = MaterialTheme.colorScheme.surface,
         ) {
             DropdownMenuItem(
                 text = { Text("Details") },

@@ -442,6 +442,7 @@ fun PhotosScreen(
     if (showCreateAlbumDialog) {
         AlertDialog(
             onDismissRequest = { showCreateAlbumDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Create album") },
             text = {
                 OutlinedTextField(
@@ -475,6 +476,7 @@ fun PhotosScreen(
                 selectAllConfirmEvent = null
                 viewModel.cancelSelectAllPrompt()
             },
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Select first ${event.cappedCount} items?") },
             text = {
                 Text(
@@ -790,6 +792,7 @@ private fun MultiAlbumPickerBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
     ) {
         Column(
             modifier = Modifier

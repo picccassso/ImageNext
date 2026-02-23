@@ -65,6 +65,7 @@ feature/      — UI features (onboarding, folders, photos, viewer, albums, sett
 
 - Added multi-select to Albums — long-press photos to enter selection mode, tap to toggle, remove multiple photos at once. System albums (Recents, Photos, Videos) remain non-editable.
 - Better animations between Photos, Albums and Settings sections. 
+- Fixed dialogs and menus that were rendering with default light theme colors instead of the app's dark theme.
 
 **2026-02-22**
 

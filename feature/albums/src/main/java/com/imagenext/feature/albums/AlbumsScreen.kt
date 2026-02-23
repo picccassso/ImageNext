@@ -177,6 +177,7 @@ fun AlbumsScreen(
     deleteTarget?.let { album ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Delete album") },
             text = { Text("Delete \"${album.displayName}\"? Photos will stay in your library.") },
             confirmButton = {
@@ -288,6 +289,7 @@ private fun AlbumCard(
                     DropdownMenu(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false },
+                        containerColor = MaterialTheme.colorScheme.surface,
                     ) {
                         DropdownMenuItem(
                             text = { Text("Rename") },
@@ -351,6 +353,7 @@ private fun AlbumNameDialog(
     var name by remember(title, initialValue) { mutableStateOf(initialValue) }
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
         title = { Text(title) },
         text = {
             OutlinedTextField(

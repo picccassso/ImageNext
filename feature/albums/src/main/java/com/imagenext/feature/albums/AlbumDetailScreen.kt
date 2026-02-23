@@ -172,6 +172,7 @@ fun AlbumDetailScreen(
                                 DropdownMenu(
                                     expanded = showMenu,
                                     onDismissRequest = { showMenu = false },
+                                    containerColor = MaterialTheme.colorScheme.surface,
                                 ) {
                                     DropdownMenuItem(
                                         text = { Text("Rename") },
@@ -297,6 +298,7 @@ fun AlbumDetailScreen(
         var draft by remember(state.title) { mutableStateOf(state.title) }
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Rename album") },
             text = {
                 OutlinedTextField(
@@ -323,6 +325,7 @@ fun AlbumDetailScreen(
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("Delete album") },
             text = { Text("Delete this album? Items stay in your library.") },
             confirmButton = {
