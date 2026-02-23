@@ -61,6 +61,10 @@ feature/      — UI features (onboarding, folders, photos, viewer, albums, sett
 
 ## Recent Changes
 
+**2026-02-23**
+
+- Added multi-select to Albums — long-press photos to enter selection mode, tap to toggle, remove multiple photos at once. System albums (Recents, Photos, Videos) remain non-editable.
+
 **2026-02-22**
 
 - Added multi-select to Photos — long-press to enter selection mode, tap to toggle, add selected media to multiple albums at once. Selection capped at 500 items with "Select all" confirmation for large timelines.

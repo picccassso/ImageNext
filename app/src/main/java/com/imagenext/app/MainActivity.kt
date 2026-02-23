@@ -137,8 +137,7 @@ fun ImageNextApp(
         !isOnboarding &&
             !isFolderSelection &&
             !isViewer &&
-            !isLocked &&
-            !(isPhotosRoute && isPhotosSelectionMode)
+            !isLocked
 
     DisposableEffect(lifecycleOwner, app.appLockManager) {
         val observer = LifecycleEventObserver { _, event ->

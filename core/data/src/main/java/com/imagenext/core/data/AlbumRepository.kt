@@ -49,6 +49,11 @@ sealed interface RemoveMediaResult {
     data object NotInAlbum : RemoveMediaResult
 }
 
+data class RemoveMediaBulkResult(
+    val removedCount: Int,
+    val notInAlbumCount: Int,
+)
+
 /** Repository for manual album CRUD and smart/local album membership operations. */
 class AlbumRepository(
     private val albumDao: AlbumDao,
@@ -292,6 +297,40 @@ class AlbumRepository(
         } else {
             RemoveMediaResult.NotInAlbum
         }
+    }
+
+    suspend fun removeMediaFromAlbumBulk(
+        albumId: Long,
+        mediaRemotePaths: List<String>,
+    ): RemoveMediaBulkResult {
+        if (isSystemAlbum(albumId)) {
+            return RemoveMediaBulkResult(
+                removedCount = 0,
+                notInAlbumCount = mediaRemotePaths.size,
+            )
+        }
+
+        val normalizedPaths = mediaRemotePaths
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+
+        if (normalizedPaths.isEmpty()) {
+            return RemoveMediaBulkResult(removedCount = 0, notInAlbumCount = 0)
+        }
+
+        val removedCount = albumDao.removeAlbumMediaBulk(albumId, normalizedPaths)
+        if (removedCount > 0) {
+            albumDao.touchAlbum(albumId, System.currentTimeMillis())
+        }
+        val notInAlbumCount = normalizedPaths.size - removedCount
+
+        return RemoveMediaBulkResult(
+            removedCount = removedCount,
+            notInAlbumCount = notInAlbumCount,
+        )
     }
 
     fun getAlbumMediaPaged(albumId: Long): Flow<PagingData<MediaItem>> {

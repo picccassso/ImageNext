@@ -4,11 +4,18 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.with
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -294,20 +301,37 @@ fun PhotosScreen(
             ),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            if (isSelectionMode) {
-                SelectionContextBar(
-                    selectedCount = selectionState.selectedCount,
-                    isAllSelectableSelected = selectionState.isAllSelectableSelected,
-                    maxSelectableCount = selectionState.maxSelectableCount,
-                    onClose = { viewModel.exitSelectionMode() },
-                    onSelectAllToggle = { viewModel.onSelectAllToggle() },
-                    onAddToAlbum = {
-                        selectedAlbumIds = emptySet()
-                        showAlbumPicker = true
-                    },
-                )
-            } else {
-                SyncStatusBar(syncState = syncState, isOffline = isOffline)
+            AnimatedContent(
+                targetState = isSelectionMode,
+                transitionSpec = {
+                    if (targetState) {
+                        // Entering selection mode: slide in from top with fade
+                        (slideInVertically { height -> -height } + fadeIn()) togetherWith
+                            (slideOutVertically { height -> -height } + fadeOut())
+                    } else {
+                        // Exiting selection mode: slide out to top, slide in from top
+                        (slideInVertically { height -> -height } + fadeIn()) togetherWith
+                            (slideOutVertically { height -> -height } + fadeOut())
+                    }
+                },
+                modifier = Modifier.background(MaterialTheme.colorScheme.surface),
+                label = "TopBarTransition",
+            ) { inSelectionMode ->
+                if (inSelectionMode) {
+                    SelectionContextBar(
+                        selectedCount = selectionState.selectedCount,
+                        isAllSelectableSelected = selectionState.isAllSelectableSelected,
+                        maxSelectableCount = selectionState.maxSelectableCount,
+                        onClose = { viewModel.exitSelectionMode() },
+                        onSelectAllToggle = { viewModel.onSelectAllToggle() },
+                        onAddToAlbum = {
+                            selectedAlbumIds = emptySet()
+                            showAlbumPicker = true
+                        },
+                    )
+                } else {
+                    SyncStatusBar(syncState = syncState, isOffline = isOffline)
+                }
             }
 
             when {
@@ -494,7 +518,6 @@ private fun SelectionContextBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
             .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -712,24 +735,36 @@ private fun ThumbnailCell(
         }
 
         if (isSelectionMode) {
+            // Smooth animated background alpha based on selection state
+            val targetAlpha = if (isSelected) 0.34f else 0.16f
+            val animatedAlpha by animateFloatAsState(
+                targetValue = targetAlpha,
+                animationSpec = tween(durationMillis = 200),
+                label = "SelectionOverlayAlpha",
+            )
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(
-                        if (isSelected) {
-                            Color.Black.copy(alpha = 0.34f)
-                        } else {
-                            Color.Black.copy(alpha = 0.16f)
-                        },
-                    ),
+                    .background(Color.Black.copy(alpha = animatedAlpha)),
             )
-            if (isSelected) {
+            // Animated checkmark with scale + fade
+            AnimatedVisibility(
+                visible = isSelected,
+                enter = scaleIn(
+                    initialScale = 0.5f,
+                    animationSpec = tween(durationMillis = 200),
+                ) + fadeIn(animationSpec = tween(durationMillis = 150)),
+                exit = scaleOut(
+                    targetScale = 0.5f,
+                    animationSpec = tween(durationMillis = 150),
+                ) + fadeOut(animationSpec = tween(durationMillis = 100)),
+                modifier = Modifier.align(Alignment.TopEnd),
+            ) {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = "Selected",
                     tint = Color.White,
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
                         .padding(6.dp)
                         .size(20.dp),
                 )
@@ -937,7 +972,6 @@ private fun SyncStatusBar(syncState: SyncState, isOffline: Boolean) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .statusBarsPadding()
                 .background(MaterialTheme.colorScheme.background)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,

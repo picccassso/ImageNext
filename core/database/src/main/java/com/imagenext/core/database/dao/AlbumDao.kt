@@ -96,6 +96,12 @@ interface AlbumDao {
     )
     suspend fun removeAlbumMedia(albumId: Long, mediaRemotePath: String): Int
 
+    @Query(
+        "DELETE FROM album_media_cross_ref " +
+            "WHERE albumId = :albumId AND mediaRemotePath IN (:mediaRemotePaths)"
+    )
+    suspend fun removeAlbumMediaBulk(albumId: Long, mediaRemotePaths: List<String>): Int
+
     @Query("DELETE FROM album_media_cross_ref WHERE mediaRemotePath IN (:remotePaths)")
     suspend fun deleteMediaRefs(remotePaths: List<String>): Int
 }
